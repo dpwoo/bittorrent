@@ -116,9 +116,9 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             "?info_hash=%s"\
             "&peer_id=%s"\
             "&port=%d"\
-            "&uploaded=%d"\
-            "&downloaded=%d"\
-            "&left=%d"\
+            "&uploaded=%lld"\
+            "&downloaded=%lld"\
+            "&left=%lld"\
             "&compact=%d"\
             "&event=%s"
 
@@ -131,7 +131,7 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             tr->tp.reqpath, 
             escape_info_hash,
             peer_id,
-            6882, 0, 0,
+            6882, (int64)0, (int64)0,
             tr->tsk->tor.totalsz, 1,
             "started"
             );

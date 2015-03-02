@@ -1,5 +1,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -46,6 +48,18 @@ utils_set_rlimit_core(int msize)
     limit.rlim_cur = msize <= 0 ? RLIM_INFINITY : 1024*1024*msize; 
     limit.rlim_max = msize <= 0 ? RLIM_INFINITY : 1024*1024*msize; 
     return setrlimit(RLIMIT_CORE, &limit);
+}
+
+/* should add -D_FILE_OFFSET_BITS=64 makefile */
+int64
+utils_lseek(int fd, int64 offset, int whence)
+{	
+	if(fd < 0 || offset < 0 || (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END)) {
+		LOG_ERROR("invalid param!\n");
+		return -1;
+	}
+
+	return lseek(fd, offset, whence);
 }
 
 int

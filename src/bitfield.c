@@ -13,7 +13,7 @@ static int bitfield_piece_find(struct pieces *p, int idx);
 static int bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx);
 
 int
-bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz)
+bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int64 totalsz)
 {
     if(!bf || pieces_num <= 0 || piece_sz <= 0 || totalsz <= 0) {
         LOG_ERROR("invalid param!\n");

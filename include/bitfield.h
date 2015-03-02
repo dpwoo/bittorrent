@@ -5,10 +5,12 @@
 extern "C" {
 #endif
 
+#include "type.h"
+
 struct bitfield;
 struct peer_msg;
 
-int bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz);
+int bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int64 totalsz);
 
 int bitfield_dup(struct bitfield *bf, char *bitmap, int nbyte);
 

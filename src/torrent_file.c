@@ -19,6 +19,7 @@
 //static int parser_dict(struct offset *offsz, struct benc_type *bt);
 static int parser_list(struct offset *offsz, struct benc_type *bt);
 static int parser_int(struct offset *offsz, struct benc_type *bt);
+static int parser_int64(struct offset *offsz, struct benc_type *bt);
 static int parser_string(struct offset *offsz, struct benc_type *bt);
 static int parser_key(struct offset *offsz, struct benc_type *bt);
 static int parser_value(struct offset *offsz, struct benc_type *bt);
@@ -62,6 +63,37 @@ parser_int(struct offset *offsz, struct benc_type *bt)
     char *ptr;
     errno = 0;
     int digit = (int)strtoll(offsz->begin, &ptr, 10);
+    if(errno || ptr[0] != 'e') {
+        LOG_ERROR("strtol[%.20s]:%s!\n", offsz->begin, strerror(errno));
+        return -1;
+    }
+
+    offsz->begin = ptr+1;
+
+    bt->type = BENC_TYPE_INT;
+    bt->val.i = digit;
+
+    return 0;
+}
+
+static int
+parser_int64(struct offset *offsz, struct benc_type *bt)
+{
+    if(offsz->begin >= offsz->end || offsz->begin[0] != 'i') {
+        LOG_ERROR("offsz->begin >= offsz->end || offsz->begin[0] != 'i'\n");
+        return -1;
+    }
+
+    offsz->begin++;
+
+    if(offsz->begin >= offsz->end) { /* || !isdigit(offsz->begin[0])) { */
+        LOG_ERROR("[%x,%x]%.20s\n", offsz->begin, offsz->end, offsz->begin-1);
+        return -1;
+    }
+
+    char *ptr;
+    errno = 0;
+    int64 digit = strtoll(offsz->begin, &ptr, 10);
     if(errno || ptr[0] != 'e') {
         LOG_ERROR("strtol[%.20s]:%s!\n", offsz->begin, strerror(errno));
         return -1;
@@ -138,7 +170,7 @@ parser_value(struct offset *offsz, struct benc_type *bt)
         case 'l':
             return parser_list(offsz, bt);
         case 'i':
-            return parser_int(offsz, bt); 
+            return parser_int64(offsz, bt); 
         default:
             return parser_string(offsz, bt);
     }

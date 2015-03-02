@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #include <stddef.h>
+#include "type.h"
 
 #define DOWN_TYPE_TYPE_SINGLE 1
 #define DOWN_TYPE_TYPE_MANY 2
@@ -33,7 +34,7 @@ struct benc_type {
     int type;
     union{
         int b;
-        long i;
+        int64 i;
         double d;
         struct {
             int len;
@@ -50,7 +51,7 @@ struct benc_type {
 struct single_file {
     char *subdir;
     char *pathname;
-    int file_size;
+    int64 file_size;
 };
 
 struct multi_files {
@@ -73,7 +74,7 @@ struct torrent_file {
     char *tracker_url[MAX_TRACKER_NUM];
     
     char *pathname;
-    int totalsz;
+    int64 totalsz;
     int isSingleDown;
     struct multi_files mfile;
 
@@ -130,7 +131,8 @@ struct pieces {
 struct bitfield {
     char *bitmap;
     int nbyte, npieces;
-    int totalsz, piecesz;
+    int piecesz;
+    int64 totalsz;
     struct pieces *pieces_list;
 };
 
@@ -171,8 +173,8 @@ struct peer {
     int am_interested;
     int peer_unchoking;
     int peer_interested;
-    int snd_size;
-    int rcv_size;
+    int64 snd_size;
+    int64 rcv_size;
     struct peer_msg pm;
     struct tracker *tr;
     struct bitfield bf;
@@ -209,7 +211,7 @@ struct torrent_task {
     int epfd;
     int listen_port;
     int task_state;
-    int down_size;
+    int64 down_size;
     struct tracker tr;
     struct bitfield bf;
     struct torrent_file tor;

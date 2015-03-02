@@ -91,7 +91,7 @@ torrent_create_downfiles(struct torrent_task *tsk)
 
 static int
 torrent_read_single_file(const char *subdir1, const char *subdir2, const char *filename, 
-                                            int offset, char *buffer, int buflen)
+                                            int64 offset, char *buffer, int64 buflen)
 {
     FILE *fp;
     if(torrent_create_file(subdir1, subdir2, filename, &fp)) {
@@ -112,14 +112,14 @@ torrent_read_single_file(const char *subdir1, const char *subdir2, const char *f
         return -1;
     }
 
-    if(fseek(fp, offset, SEEK_SET)) {
-        LOG_ERROR("fseek %s:%s\n", filename, strerror(errno));
+    if(utils_lseek(fileno(fp), offset, SEEK_SET) == -1) {
+        LOG_ERROR("lseek %s:%s\n", filename, strerror(errno));
         fclose(fp);
         return -1;
     }
 
     if(fread(buffer, 1, buflen, fp) != buflen) {
-        LOG_ERROR("fwrite %s:%s\n", filename, strerror(errno));
+        LOG_ERROR("fread %s:%s\n", buflen, filename, strerror(errno));
         fclose(fp);
         return -1;
     }
@@ -148,7 +148,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         return -1;
     }
 
-    int offset = tsk->tor.piece_len * pieceid;
+    int64 offset = (int64)tsk->tor.piece_len * pieceid;
     if(tsk->tor.isSingleDown) {
         int ret = torrent_read_single_file(NULL, NULL, tsk->tor.pathname,
                                          offset, buffer, buflen);
@@ -161,7 +161,8 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         return 0;
     }
 
-    int i, invalid_offset = 0, fsize = 0;
+    int i;
+    int64 invalid_offset = 0, fsize = 0;
     struct single_file *sfile =  tsk->tor.mfile.files;
     for(i = 0; i < tsk->tor.mfile.files_num; i++) {
         invalid_offset = fsize;
@@ -176,8 +177,8 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         return -1;
     }
 
-    int readsz = buflen; 
-    int leftsz = offset + buflen - fsize;
+    int64 readsz = buflen; 
+    int64 leftsz = offset + buflen - fsize;
     if(leftsz > 0) {
         readsz = buflen - leftsz;
     }
@@ -188,7 +189,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         return -1; 
     }
 
-    int bufoffset = readsz;
+    int64 bufoffset = readsz;
     for(i++; leftsz > 0 && i < tsk->tor.mfile.files_num; i++) {
         readsz = leftsz;
         leftsz = leftsz - sfile[i].file_size; 
@@ -212,7 +213,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
 
 static int
 torrent_write_single_file(const char *subdir1, const char *subdir2, const char *filename, 
-                                                int offset, const char *buffer, int buflen)
+                                                int64 offset, const char *buffer, int64 buflen)
 {
     FILE *fp;
     if(torrent_create_file(subdir1, subdir2, filename, &fp)) {
@@ -220,8 +221,8 @@ torrent_write_single_file(const char *subdir1, const char *subdir2, const char *
         return -1;
     }
 
-    if(fseek(fp, offset, SEEK_SET)) {
-        /* LOG_ERROR("fseek %s:%s\n", filename, strerror(errno)); */
+    if(utils_lseek(fileno(fp), offset, SEEK_SET)) {
+        LOG_ERROR("fseek %s:%s\n", filename, strerror(errno));
         fclose(fp);
         return -1;
     }
@@ -244,13 +245,14 @@ torrent_write_piece(struct torrent_task *tsk, int pieceid, const char *buffer, i
         return -1;
     }
 
-    int offset = tsk->tor.piece_len * pieceid;
+    int64 offset = (int64)tsk->tor.piece_len * pieceid;
     if(tsk->tor.isSingleDown) {
         return torrent_write_single_file(NULL, NULL, tsk->tor.pathname,
                                          offset, buffer, buflen);
     } 
 
-    int i, invalid_offset = 0, fsize = 0;
+    int i;
+    int64 invalid_offset = 0, fsize = 0;
     struct single_file *sfile =  tsk->tor.mfile.files;
     for(i = 0; i < tsk->tor.mfile.files_num; i++) {
         invalid_offset = fsize;
@@ -265,8 +267,8 @@ torrent_write_piece(struct torrent_task *tsk, int pieceid, const char *buffer, i
         return -1;
     }
 
-    int writesz = buflen; 
-    int leftsz = offset + buflen - fsize;
+    int64 writesz = buflen; 
+    int64 leftsz = offset + buflen - fsize;
     if(leftsz > 0) {
         writesz = buflen - leftsz;
     }
@@ -276,7 +278,7 @@ torrent_write_piece(struct torrent_task *tsk, int pieceid, const char *buffer, i
         return -1; 
     }
 
-    int bufoffset = writesz;
+    int64 bufoffset = writesz;
     for(i++; leftsz > 0 && i < tsk->tor.mfile.files_num; i++) {
         writesz = leftsz;
         leftsz = leftsz - sfile[i].file_size; 

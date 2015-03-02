@@ -53,7 +53,22 @@ handle_string_kv(struct benc_type *bt, const char *str, char **setme, int *setme
 }
 
 int
-handle_int_kv(struct benc_type *bt, const char *str, int *setme)
+handle_int64_kv(struct benc_type *bt, const char *str, int64 *setme)
+{
+	struct benc_type *val;
+
+	val = get_dict_value_by_key(bt, str, BENC_TYPE_INT);
+	if(!val) {
+		return -1;
+	}
+
+	*setme = val->val.i;
+
+	return 0;
+}
+
+int
+handle_int_kv(struct benc_type *bt, const char *str, int32 *setme)
 {
 	struct benc_type *val;
 
@@ -176,7 +191,7 @@ handle_info_pieces_kv(struct benc_type *bt, struct torrent_file *tor)
 static int
 handle_info_length_kv(struct benc_type *bt, struct torrent_file *tor)
 {
-    if(handle_int_kv(bt, "length", &tor->totalsz)) {
+    if(handle_int64_kv(bt, "length", &tor->totalsz)) {
         return -1;
     }
 
@@ -256,7 +271,7 @@ handle_subdir_path(struct benc_type *file, char **subdir)
 static int
 handle_info_file_kv(struct benc_type *file, struct single_file *sf)
 {
-    if(handle_int_kv(file, "length", &sf->file_size)) {
+    if(handle_int64_kv(file, "length", &sf->file_size)) {
         LOG_ERROR("mfile length key failed!\n");
         return -1;
     }
@@ -391,7 +406,7 @@ dump_torrent_info(struct torrent_file *tor)
     }
 
     LOG_DEBUG("piece length:%d\n", tor->piece_len);
-    LOG_DEBUG("total size:%d\n", tor->totalsz);
+    LOG_DEBUG("total size:%lld\n", tor->totalsz);
     LOG_DEBUG("pieces num:%d\n", tor->pieces_num);
 
     if(tor->tracker_num) {
@@ -402,7 +417,7 @@ dump_torrent_info(struct torrent_file *tor)
 
     if(!tor->isSingleDown && tor->mfile.files_num) {
         for(i = 0; i < tor->mfile.files_num; i++) {
-            LOG_DEBUG("file[%d]:%s/%s\n",
+            LOG_DEBUG("file[%lld]:%s/%s\n",
                  tor->mfile.files[i].file_size, 
                  tor->mfile.files[i].subdir == NULL ? "" : tor->mfile.files[i].subdir,
                  tor->mfile.files[i].pathname);

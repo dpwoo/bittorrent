@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include "btype.h"
  
 struct offset {
     char *begin;
@@ -22,6 +23,7 @@ int parser_dict(struct offset *offsz, struct benc_type *bt);
 int handle_string_kv(struct benc_type *bt, const char *str, char **setme, int *setmelen);
 
 int handle_int_kv(struct benc_type *bt, const char *str, int *setme);
+int handle_int64_kv(struct benc_type *bt, const char *str, int64 *setme);
 
 int torrent_create_downfiles(struct torrent_task *tsk);
 

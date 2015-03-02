@@ -47,7 +47,7 @@ CFLAGS = -g -Wall -MMD $(foreach dir,$(INCLUDEDIR),-I$(dir))
 ARFLAGS = rc
 
 #special parameters for apps
-CFLAGS +=
+CFLAGS += -D_FILE_OFFSET_BITS=64 
 
 #c file compile parameters and linked libraries
 CPPFLAGS = 
