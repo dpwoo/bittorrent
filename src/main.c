@@ -31,10 +31,17 @@ test_one_task(char *torfile, struct torrent_task *tsk)
 		return -1;
 	}
 
-    if(bitfield_create(&tsk->bf, tsk->tor.pieces_num, tsk->tor.piece_len, tsk->tor.totalsz, 1)) {
+    if(bitfield_create(&tsk->bf, tsk->tor.pieces_num, tsk->tor.piece_len, tsk->tor.totalsz)) {
         LOG_ERROR("bitfield creat failed!\n");
         return -1;
     }
+
+    if(torrent_create_downfiles(tsk)) {
+        LOG_ERROR("torrent create downfile failed!\n");
+        return -1;
+    }
+
+    torrent_check_downfiles_bitfield(tsk);
 
     if(tracker_announce(tsk)) {
         LOG_ERROR("tracker announce failed!\n");

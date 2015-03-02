@@ -210,12 +210,18 @@ handle_subdir_path(struct benc_type *file, char **subdir)
         return -1;
     }
 
+#if 0
     char *s, *pathname = malloc(totalsz+1);
+#else
+    char *s, *pathname = malloc(totalsz);
+#endif
+
     if(!pathname) {
         LOG_ERROR("out of memory!\n");
         return -1;
     }
 
+//  LOG_DEBUG("\n\n\n");
     s = pathname;
     for(i = 0; i < file->val.list.nlist-1; i++) {
         int slen;
@@ -224,10 +230,24 @@ handle_subdir_path(struct benc_type *file, char **subdir)
         path = file->val.list.vals + i;
         slen = path->val.str.len;
         memcpy(s, path->val.str.s, slen);
+
+//      LOG_DUMP(path->val.str.s, path->val.str.len, "str:");
+//      LOG_DEBUG("str:%s\n", path->val.str.s);
+
+#if 0
         s[slen] = '/';
         s += slen+1;
+#else
+        if(i+1 != file->val.list.nlist-1) {
+            s[slen] = '/';
+            s += slen+1;
+        } else { /* the last dir not need '/' and for the '\0' */
+            s += slen;
+        }
+#endif
+
     }
-    pathname[totalsz] = '\0';
+    pathname[totalsz-1] = '\0';
     *subdir = pathname;
 
     return 0;
@@ -382,7 +402,7 @@ dump_torrent_info(struct torrent_file *tor)
 
     if(!tor->isSingleDown && tor->mfile.files_num) {
         for(i = 0; i < tor->mfile.files_num; i++) {
-            LOG_DEBUG("file[%d]:%s%s\n",
+            LOG_DEBUG("file[%d]:%s/%s\n",
                  tor->mfile.files[i].file_size, 
                  tor->mfile.files[i].subdir == NULL ? "" : tor->mfile.files[i].subdir,
                  tor->mfile.files[i].pathname);

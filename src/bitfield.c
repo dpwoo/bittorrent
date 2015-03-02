@@ -7,72 +7,23 @@
 
 #define SLICE_SZ (16*1024)
 
-static void 
-bitfield_dump(struct bitfield *bf)
-{
-    struct pieces *p;
-    for(p = bf->pieces; p; p = p->next) {
-        LOG_DEBUG("piece[%d]:\n", (p-bf->pieces));
-        struct slice *sl;
-        for(sl = p->slice; sl; sl = sl->next) {
-            LOG_DEBUG("slice[%d]:[%d,%d]\n",sl-p->slice, sl->offset, sl->size);
-        }
-    }
-}
-
-static int
-bitfield_local_init(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz)
-{
-    int maxslice = (piece_sz + (SLICE_SZ -1)) / (SLICE_SZ);
-
-    int i, j;
-    for(j = 0; j < 2; j++) {
-        bf->slice[j] =  calloc(maxslice, sizeof(struct slice));
-        if(!bf->slice[j]) {
-            LOG_ERROR("out of memory!\n");
-            return -1;
-        }
-
-        for(i = 0; i < maxslice; i++) {       
-            bf->slice[j][i].offset = i*SLICE_SZ;
-            bf->slice[j][i].size = SLICE_SZ;
-            bf->slice[j][i].next = bf->slice[j] + i + 1;
-        }
-        bf->slice[j][maxslice-1].next = NULL;
-    }
-
-    for(i = 0; i < pieces_num; i++) {
-        bf->pieces[i].slice = bf->slice[0];
-        bf->pieces[i].pre = bf->pieces + i - 1;
-        bf->pieces[i].next = bf->pieces + i + 1;
-    }
-    bf->pieces[0].pre = NULL;
-    bf->pieces[pieces_num-1].next = NULL;
-    bf->pieces[pieces_num-1].slice = bf->slice[1];
-
-    int last_piece = totalsz % piece_sz;
-    if(last_piece) {
-        int nslice = (last_piece+(SLICE_SZ-1)) / SLICE_SZ;
-        int last_slice = last_piece % SLICE_SZ;
-        bf->slice[1][nslice-1].next = NULL;
-        if(last_slice) {
-            bf->slice[1][nslice-1].size = last_slice;
-        }
-    }
-
-    return 0;
-}
+static int bitfield_piece_insert_by_sort(struct pieces **list, struct pieces *node);
+static int bitfield_piece_remove(struct pieces **p, int idx);
+static int bitfield_piece_find(struct pieces *p, int idx);
+static int bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx);
 
 int
-bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz, int local)
+bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz)
 {
-    if(!bf || pieces_num <= 0 || (local && piece_sz <= 0 && totalsz <= 0)) {
+    if(!bf || pieces_num <= 0 || piece_sz <= 0 || totalsz <= 0) {
         LOG_ERROR("invalid param!\n");
         return -1;
     }
 
     bf->npieces = pieces_num;
     bf->nbyte = (pieces_num + 7) / 8;
+    bf->totalsz = totalsz;
+    bf->piecesz = piece_sz;
 
     bf->bitmap = calloc(1, bf->nbyte);
     if(!bf->bitmap) {
@@ -80,36 +31,7 @@ bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz, 
         return -1;
     }
 
-    bf->pieces_slot = bf->pieces = calloc(pieces_num, sizeof(struct pieces));
-    if(!bf->pieces_slot) {
-        LOG_ERROR("out of memory!\n");
-        goto MEM_FAILED;
-    }
-
-    if(local && bitfield_local_init(bf, pieces_num, piece_sz, totalsz)) {
-        goto MEM_FAILED;
-    }
-
-#if 0
-    bitfield_dump(bf);
-#endif
-
     return 0;
-
-MEM_FAILED:
-    free(bf->bitmap);
-    bf->bitmap = NULL;
-
-    free(bf->pieces_slot);
-    bf->pieces = NULL;
-    bf->pieces_slot = NULL;
-
-    free(bf->slice[0]);
-    free(bf->slice[1]);
-    bf->slice[0] = NULL;
-    bf->slice[1] = NULL;
-
-    return -1;
 }
 
 int
@@ -126,93 +48,221 @@ bitfield_dup(struct bitfield *bf, char *bitmap, int nbyte)
 }
 
 int
-bitfield_intrested(struct bitfield *me, struct bitfield *peer)
+bitfield_intrested(struct bitfield *local, struct bitfield *peer)
 {
-    if(!me || !peer || !me->bitmap || !peer->bitmap
-                    || me->npieces != peer->npieces
-                    || me->nbyte != peer->nbyte) {
+    if(!local || !peer || !local->bitmap || !peer->bitmap
+                    || local->npieces != peer->npieces
+                    || local->nbyte != peer->nbyte) {
         LOG_ERROR("invalid param!\n");
         return 0;
     }
 
-    peer->pieces = NULL;
-    struct pieces **p = &peer->pieces;
+    peer->pieces_list = NULL;
+    struct pieces *tmp, **p = &peer->pieces_list;
 
     int i, k, idx;
-    for(i = 0; i < me->nbyte; i++) {
-        unsigned char c1 = (unsigned char)me->bitmap[i];
+    for(i = 0; i < local->nbyte; i++) {
+        unsigned char c1 = (unsigned char)local->bitmap[i];
         unsigned char c2 = (unsigned char)peer->bitmap[i];
         unsigned char c3  = (c1|c2) ^ c1;
 
         for(k = 7; c3 && k >= 0; k--) {
             if(c3 & (1<<k)) {
                 idx = (i*8)+(7-k);
-                *p = &peer->pieces_slot[idx];
+                if(!(tmp = calloc(1, sizeof(*tmp)))) {
+                    goto MEM_FAILED;
+                }
+                tmp->idx = idx;
+                *p = tmp;
                 p = &(*p)->next;
             }
         }
     }
 
-    return peer->pieces ? 1 : 0;
+    return peer->pieces_list ? 1 : 0;
+
+MEM_FAILED:
+    LOG_ERROR("out of mmemory!\n");
+    while(peer->pieces_list) {
+        tmp = peer->pieces_list;
+        peer->pieces_list = tmp->next;
+        free(tmp);
+    }
+    return 0;
 }
 
 int
-bitfield_local_have(struct bitfield *me, int idx)
+bitfield_peer_garbage_piece(struct bitfield *local, int idx)
 {
-    if(idx < 0 || idx >= me->npieces) {
+    if(idx < 0 || idx >= local->npieces) {
         return -1;
     }
 
-    int pidx = idx >> 3; /* idx/8 */
-    int bidx = idx & 3;  /* idx%8 */
-    unsigned char *byte = (unsigned char *)&me->bitmap[pidx];
-    (*byte) |= 1 << bidx;
+    bitfield_piece_remove(&local->pieces_list, idx);
 
     return 0;
 }
 
 int
-bitfield_peer_have(struct bitfield *me, struct bitfield *peer, int idx)
+bitfield_local_have(struct bitfield *local, int idx)
 {
-    if(idx < 0 || idx > me->npieces) {
+    if(idx < 0 || idx >= local->npieces) {
         return -1;
     }
 
     int pidx = idx >> 3; /* idx/8 */
-    int bidx = idx & 3;  /* idx%8 */
-    unsigned char byte = me->bitmap[pidx];
+    int bidx = idx & 7;  /* idx%8 */
+    unsigned char *byte = (unsigned char *)&local->bitmap[pidx];
 
-    if(byte & (1 << bidx)) {
-        return 0; /* we already have this piece */
+    if( ((*byte) & (1 << (7-bidx))) || bitfield_piece_remove(&local->pieces_list, idx)) {
+        LOG_ERROR("local have piece[%d] error!\n", idx);
+        return -1;
+    }
+
+    *byte |= (1 << (7-bidx));
+
+    return 0;
+}
+
+int
+bitfield_peer_have(struct bitfield *local, struct bitfield *peer, int idx)
+{
+    if(idx < 0 || idx > local->npieces) {
+        return -1;
+    }
+
+    int pidx = idx >> 3; /* idx/8 */
+    int bidx = idx & 7;  /* idx%8 */
+    unsigned char byte = local->bitmap[pidx];
+
+    if( byte & (1 << (7-bidx)) ) {
+        return -1; /* we already have this piece */
+    }
+
+    struct pieces *p = calloc(1, sizeof(*p));
+    if(!p) {
+        LOG_ERROR("out of memory!\n");
+        return -1;
+    }
+    p->idx = idx;
+
+    bitfield_piece_insert_by_sort(&peer->pieces_list, p);
+
+    return 0;
+}
+
+static int
+bitfield_piece_insert_by_sort(struct pieces **list, struct pieces *node)
+{
+    for(; *list && (*list)->idx < node->idx; list = &(*list)->next) {
+        /* nothing */ 
+    }
+    node->next = *list;
+    *list = node;
+    return 0;
+}
+
+static int
+bitfield_piece_remove(struct pieces **p, int idx)
+{
+    for(; *p; p = &(*p)->next) {
+        if((*p)->idx == idx) {
+            struct pieces *tmp = *p;
+            *p = tmp->next;
+            free(tmp);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
+bitfield_piece_find(struct pieces *p, int idx)
+{
+    for(; p; p = p->next) {
+        if(p->idx == idx) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
+bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx)
+{
+    int nslice, last_piecesz = 0, last_slicesz = 0;
+
+    nslice = (bf->piecesz + (SLICE_SZ-1)) /  SLICE_SZ;
+    last_piecesz = bf->totalsz % bf->piecesz;
+
+    if(idx == bf->npieces-1 && last_piecesz != 0) {
+        nslice = (last_piecesz + (SLICE_SZ-1)) / SLICE_SZ;
+        last_slicesz = last_piecesz % SLICE_SZ;
+    }
+
+    pm->downed_tail = &pm->downed_list;
+    pm->downed_list = NULL;
+
+    pm->req_tail = &pm->req_list;
+    pm->req_list = NULL;
+
+    pm->wait_list = calloc(nslice, sizeof(struct slice)); 
+    if(!pm->wait_list) {
+        LOG_ERROR("out of memory!\n");
+        return -1;
+    }
+
+    int i;
+    for(i = 0; i < nslice; i++) {
+        pm->wait_list[i].idx = idx;
+        pm->wait_list[i].slicesz = SLICE_SZ;
+        pm->wait_list[i].offset = i * SLICE_SZ;
+        pm->wait_list[i].next = (i != nslice-1) ? pm->wait_list + i + 1 : NULL;
+    }
+
+    if(last_slicesz) {
+        pm->wait_list[nslice-1].slicesz = last_slicesz;
     }
 
     return 0;
 }
 
 int
-bitfield_get_request(struct bitfield *me, struct bitfield *peer, int *idx, int *offset, int *size)
+bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct peer_msg *pm)
 {
-    if(!me || !peer || !idx || !offset || !size) {
+    if(!local || !peer || !pm) {
         LOG_ERROR("invalid param!\n");
         return -1;
     }
      
-    for(; peer->pieces; peer->pieces = peer->pieces->next) {
-        int idx_piece;
-        
-        idx_piece = peer->pieces - peer->pieces_slot;
-        if(me->pieces_slot[idx_piece].slice) {
-            struct slice *sl;
-            
-            sl = me->pieces_slot[idx_piece].slice;
-            me->pieces_slot[idx_piece].slice = sl->next;
-            *idx = idx_piece;
-            *offset = sl->offset;
-            *size = sl->size;
+    struct pieces *tmp, **p = &peer->pieces_list;
+    while(*p) {
+        int idx = (*p)->idx;
+        int pidx = idx >> 3; /* idx/8 */
+        int bidx = idx & 7;  /* idx%8 */
+        unsigned char byte = local->bitmap[pidx];
+
+        if( (byte & (1 << (7-bidx))) ) { /* local alread have */
+            tmp = *p;
+            *p = (*p)->next; /* remove this one */
+            free(tmp);
+            continue;
+        } else if(!bitfield_piece_find(local->pieces_list, idx)){ /* downloading */
+            p = &(*p)->next; /* skip this one */
+            continue;
+        } else {
+            tmp = *p; 
+            *p = (*p)->next; /* remove this one */
+            tmp->next = local->pieces_list;
+            local->pieces_list = tmp;
+
+            bitfield_build_slice_list(local, pm, tmp->idx);
 
             return 0;
         }
     }
+
+    /* TODO select a downloading piece */
 
     return -1;
 }

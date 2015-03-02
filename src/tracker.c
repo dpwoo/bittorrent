@@ -425,15 +425,17 @@ tracker_event_handle_waitrsp(int event, struct tracker *tr)
         } else {
             LOG_DEBUG("recv response(%s:%s)OK!\n", tr->tp.host, tr->tp.port);
             if(tracker_parser_response(tr, rspbuf.body, rspbuf.bodysz)) {
+                /*
                 reset_tracker_members(tr);
                 if(tracker_try_announce(tr->tsk)) {
                     LOG_INFO("can't connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);
                 }
+                */
             }
         }
 
         free(rspbuf.rcvbuf);
-#if 0
+#if 1
         reset_tracker_members(tr);
         if(tracker_try_announce(tr->tsk)) {
             LOG_INFO("can't connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);

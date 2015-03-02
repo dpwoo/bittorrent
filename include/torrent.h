@@ -23,6 +23,14 @@ int handle_string_kv(struct benc_type *bt, const char *str, char **setme, int *s
 
 int handle_int_kv(struct benc_type *bt, const char *str, int *setme);
 
+int torrent_create_downfiles(struct torrent_task *tsk);
+
+int torrent_write_piece(struct torrent_task *tsk, int pieceid, const char *buffer, int buflen);
+
+int torrent_read_piece(struct torrent_task *tsk, int pieceid, char **buffer, int *buflen);
+
+int torrent_check_downfiles_bitfield(struct torrent_task *tsk);
+
 #ifdef __cplusplus
 extern "C" }
 #endif

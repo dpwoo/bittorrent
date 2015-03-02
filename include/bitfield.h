@@ -6,15 +6,21 @@ extern "C" {
 #endif
 
 struct bitfield;
+struct peer_msg;
 
-int bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz, int local);
+int bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int totalsz);
 
 int bitfield_dup(struct bitfield *bf, char *bitmap, int nbyte);
 
-int bitfield_intrested(struct bitfield *me, struct bitfield *peer);
+int bitfield_intrested(struct bitfield *local, struct bitfield *peer);
 
-int bitfield_get_request(struct bitfield *me, struct bitfield *peer,
-                         int *idx, int *offset, int *size);
+int bitfield_local_have(struct bitfield *local, int idx);
+
+int bitfield_peer_garbage_piece(struct bitfield *local, int idx);
+
+int bitfield_peer_have(struct bitfield *local, struct bitfield *peer, int idx);
+
+int bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct peer_msg *pm);
 
 #ifdef __cplusplus
 extern "C" }

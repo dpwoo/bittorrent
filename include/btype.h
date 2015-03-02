@@ -98,34 +98,12 @@ struct tracker_prot {
 	char *reqpath;
 };
 
-struct slice {
-    int offset, size;
-    struct slice *next;
-};
-
-struct pieces {
-    struct slice *slice;
-    struct pieces *pre, *next;
-};
-
-struct bitfield {
-    char *bitmap;
-    int nbyte;
-    int npieces;
-    struct pieces *pieces_slot, *pieces;
-    struct slice *slice[2];
-};
-
 enum {
     PEER_STATE_NONE = 0,
     PEER_STATE_CONNECTING,
     PEER_STATE_SEND_HANDSHAKE,
     PEER_STATE_EXCHANGE_BITFIELD,
     PEER_STATE_CONNECTD,
-};
-
-enum {
-    PEER_SUB_STATE_XXX = 0,
 };
 
 enum {
@@ -144,40 +122,40 @@ enum {
     PEER_MSG_ID_INVALID,
 };
 
-struct peer_msg {
-    char rcvbuf[8*1024];
-    int rcvlen;
-
-    int downloading;
+struct pieces {
     int idx;
-    int offset;
-    int reqsz;
+    struct pieces *next;
+};
 
-    char *downbuf;
-    int downoffset;
+struct bitfield {
+    char *bitmap;
+    int nbyte, npieces;
+    int totalsz, piecesz;
+    struct pieces *pieces_list;
+};
 
-    int msgtype;
-    union {
-        struct {
-           char buf;
-           int buflen;
-        }handshake;
-        struct {
-            char *buf;
-            int buflen;
-        }bitfiled;
-        struct {
-            int idx;
-        }have;  
-        struct {
-            int idx, offset, size;
-        }req_cancel;
-        struct {
-            int idx, offset;
-            int blocksz, reqsz;
-            char *block;
-        }piece;
-    }payload;
+struct slice {
+    int idx, offset;
+    int slicesz, downsz;
+    char *data;
+    struct slice *next;
+};
+
+struct peer_msg {
+    int rcvlen;
+    char rcvbuf[8*1024];
+
+    int data_transfering;
+
+    int nreq_list;
+    
+    struct slice **req_tail;
+    struct slice *req_list;
+
+    struct slice **downed_tail;
+    struct slice *downed_list;
+
+    struct slice *wait_list;
 };
 
 struct tracker;

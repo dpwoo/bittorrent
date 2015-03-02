@@ -321,7 +321,7 @@ http_parser_head(char *rspbuf, int rsplen)
     int con_len;
     con_len = http_get_content_length(rspbuf, rsplen);
     if(con_len > 0 && con_len != rsplen - hdrlen) {
-        LOG_ALARM("warning, http content len%d != body len%d\n",
+        LOG_ALARM("warning, http content len[%d] != body len[%d]\n",
                  con_len, rsplen - hdrlen);
     }
 
@@ -331,9 +331,11 @@ http_parser_head(char *rspbuf, int rsplen)
 static int
 http_parser_body(char *rspbuf, int rsplen)
 {
+
 #if 0
     LOG_DUMP(rspbuf, rsplen);
 #endif
+
     return 0;
 }
 

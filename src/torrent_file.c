@@ -61,9 +61,9 @@ parser_int(struct offset *offsz, struct benc_type *bt)
 
     char *ptr;
     errno = 0;
-    int digit = (int)strtol(offsz->begin, &ptr, 10);
+    int digit = (int)strtoll(offsz->begin, &ptr, 10);
     if(errno || ptr[0] != 'e') {
-        LOG_ERROR("strtol error!\n");
+        LOG_ERROR("strtol[%.20s]:%s!\n", offsz->begin, strerror(errno));
         return -1;
     }
 
@@ -90,9 +90,9 @@ parser_string(struct offset *offsz, struct benc_type *bt)
 
     char *ptr;
     errno = 0;
-    int strlen = (int)strtol(offsz->begin, &ptr, 10);
+    int strlen = (int)strtoll(offsz->begin, &ptr, 10);
     if(errno || strlen < 0 || ptr[0] != ':') { // strlen can be zero
-        LOG_ERROR("strtol error\n");
+        LOG_ERROR("strtol %s\n", strerror(errno));
         return -1;
     }
 
@@ -222,12 +222,13 @@ static void dump_benc_type(struct benc_type *bt)
               LOG_DEBUG("int:%ld\n", bt->val.i);
               break;
         case BENC_TYPE_STRING:
-              LOG_DEBUG("str:");
+              //LOG_DEBUG("str:");
               for(i = 0; i < bt->val.str.len; i++) {
                   //LOG_DEBUG("%c", bt->val.str.s[i]);
-                  if(i > 64) break;
+                  //if(i > 64) break;
               }
-              LOG_DEBUG("\n");
+              //LOG_DEBUG("\n");
+              LOG_DEBUG("str[%d]: %s\n", bt->val.str.len, bt->val.str.s);
               break;
         case BENC_TYPE_LIST:
               LOG_DEBUG("list:\n");
