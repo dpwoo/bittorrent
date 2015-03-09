@@ -22,7 +22,7 @@ free_ip_address_info(struct addrinfo *ai)
 }
 
 int
-get_ip_address_info(struct tracker_prot *tp, struct addrinfo **res)
+get_ip_address_info(struct tracker_prot *tp, int *ip, uint16 *port)
 {
     struct addrinfo hints;
 
@@ -35,12 +35,19 @@ get_ip_address_info(struct tracker_prot *tp, struct addrinfo **res)
 
     LOG_INFO("looking up %s:%s ...\n", tp->host, tp->port);
 
-    int ret = getaddrinfo(tp->host, tp->port, &hints, res);
+	struct addrinfo *res = NULL;
+    int ret = getaddrinfo(tp->host, tp->port, &hints, &res);
     if(ret) {
         LOG_INFO("getaddrinfo (%s:%s):%s\n", tp->host, tp->port, gai_strerror(ret));
+        *ip = 0;
+        *port = 0;
         return -1;
     }
+	
+	memcpy(port, res->ai_addr->sa_data, 2);
+	memcpy(ip, res->ai_addr->sa_data+2, 4);
 
+	freeaddrinfo(res);
     return 0; 
 }
 

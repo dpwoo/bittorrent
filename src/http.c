@@ -10,73 +10,6 @@
 
 char peer_id[PEER_ID_LEN + 1] = "_wudongpeng_2015_02_";
 
-int
-http_url_parser(const char *url, struct tracker_prot *tp)
-{
-	memset(tp, 0, sizeof(*tp));
-
-	char *str = strdup(url);
-	if(!str) {
-		LOG_ERROR("out of memory!\n");
-		return -1;
-	}
-
-	char *s;
-    if(strstr(str, "udp://")) {
-        s = str + 6;
-        tp->prot_type = TRACKER_PROT_UDP;
-    } else if(strstr(str, "http://")) {
-        s  = str + 7;
-        tp->prot_type = TRACKER_PROT_HTTP;
-    } else {
-		LOG_INFO("not support tracker proto[%s]!\n", url);
-		free(str);
-		return -1;
-    }
-
-	char *path = strchr(s, '/');
-	if(path) {
-		*path++ = '\0';
-	}
-
-	char *port = strchr(s, ':');
-	if(port) {
-		*port++ = '\0';
-		if(!isdigit(*port)) {
-			LOG_INFO("invalid url[%s]!\n", url);
-			free(str);
-			return -1;
-		}
-        tp->port = strdup(port);
-	} else {
-        tp->port = strdup("80");
-    }
-
-	tp->host = strdup(s);
-
-	if(!path || *path == '\0') {
-		tp->reqpath = strdup("/");
-	} else {
-		int slen = strlen(path);
-		char buf[slen+2];
-		snprintf(buf, sizeof(buf), "/%s", path);
-		tp->reqpath = strdup(buf);
-	}
-
-	if(!tp->host || !tp->reqpath || !tp->port) {
-		LOG_ERROR("out of memory!\n");
-		free(tp->host);
-		free(tp->reqpath);
-        free(tp->port);
-		free(str);
-		return -1;
-	}
-
-	free(str);
-
-	return 0;
-}
-
 static int
 is_rfc2396_alnum (char ch)
 {
@@ -115,7 +48,7 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             "%s"\
             "?info_hash=%s"\
             "&peer_id=%s"\
-            "&port=%d"\
+            "&port=%hd"\
             "&uploaded=%lld"\
             "&downloaded=%lld"\
             "&left=%lld"\
@@ -131,10 +64,17 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             tr->tp.reqpath, 
             escape_info_hash,
             peer_id,
-            6882, (int64)0, (int64)0,
-            tr->tsk->tor.totalsz, 1,
-            "started"
+            tr->tsk->listen_port,
+            (int64)0,
+            (int64)0,
+            (int64)tr->tsk->leftpieces * tr->tsk->tor.piece_len,
+            1,
+            tr->announce_cnt ? "" : "started"
             );
+
+#if 0
+    LOG_DEBUG("tracker uri:%s\n", uribuf);
+#endif
 
     return 0;
 }
@@ -166,10 +106,6 @@ http_request(struct tracker *tr)
     char uribuf[1024], reqbuf[2048];
 
     http_build_uri(tr, uribuf, sizeof(uribuf));
-
-#if 0
-    LOG_DEBUG("send uri:%s\n", uribuf);
-#endif
 
     int reqlen = snprintf(reqbuf, sizeof(reqbuf), "GET %s HTTP/1.0\r\n\r\n", uribuf);
 

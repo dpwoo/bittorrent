@@ -10,9 +10,7 @@ extern "C" {
 struct addrinfo;
 
 int free_ip_address_info(struct addrinfo *ai);
-int get_ip_address_info(struct tracker_prot *tp, struct addrinfo **res);
-
-int http_url_parser(const char *url, struct tracker_prot *tp);
+int get_ip_address_info(struct tracker_prot *tp, int *ip, uint16 *port);
 
 int create_tracker_client_socket(struct tracker_prot *tp, struct addrinfo *ai);
 int connect_tracker_server(int fd, struct tracker_prot *tp,

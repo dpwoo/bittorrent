@@ -5,12 +5,10 @@
 #include "bitfield.h"
 #include "log.h"
 
-#define SLICE_SZ (16*1024)
-
 static int bitfield_piece_insert_by_sort(struct pieces **list, struct pieces *node);
 static int bitfield_piece_remove(struct pieces **p, int idx);
 static int bitfield_piece_find(struct pieces *p, int idx);
-static int bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx);
+static int bitfield_build_slice_list(struct bitfield *bf, struct peer_rcv_msg *pm, int idx);
 
 int
 bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int64 totalsz)
@@ -92,7 +90,7 @@ MEM_FAILED:
 }
 
 int
-bitfield_peer_garbage_piece(struct bitfield *local, int idx)
+bitfield_peer_giveup_piece(struct bitfield *local, int idx)
 {
     if(idx < 0 || idx >= local->npieces) {
         return -1;
@@ -113,15 +111,36 @@ bitfield_local_have(struct bitfield *local, int idx)
     int pidx = idx >> 3; /* idx/8 */
     int bidx = idx & 7;  /* idx%8 */
     unsigned char *byte = (unsigned char *)&local->bitmap[pidx];
-
-    if( ((*byte) & (1 << (7-bidx))) || bitfield_piece_remove(&local->pieces_list, idx)) {
-        LOG_ERROR("local have piece[%d] error!\n", idx);
+    if((*byte) & (1 << (7-bidx))) {
+        LOG_DEBUG("local alread have id[%d]\n", idx);
         return -1;
     }
+
+    bitfield_piece_remove(&local->pieces_list, idx);
 
     *byte |= (1 << (7-bidx));
 
     return 0;
+}
+
+int
+bitfield_is_local_have(struct bitfield *local, int idx, int offset, int size)
+{
+    if(idx < 0 || idx >= local->npieces || offset < 0 
+               || offset >= local->piecesz || size <= 0 || size > SLICE_SZ) {
+        return -1;
+    }
+
+    int pidx = idx >> 3; /* idx/8 */
+    int bidx = idx & 7;  /* idx%8 */
+    unsigned char byte = (unsigned char)local->bitmap[pidx];
+
+    if(!(byte & (1 << (7-bidx)))) {
+        return -1;
+    }
+
+    return 0;
+
 }
 
 int
@@ -188,7 +207,7 @@ bitfield_piece_find(struct pieces *p, int idx)
 }
 
 static int
-bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx)
+bitfield_build_slice_list(struct bitfield *bf, struct peer_rcv_msg *pm, int idx)
 {
     int nslice, last_piecesz = 0, last_slicesz = 0;
 
@@ -228,7 +247,7 @@ bitfield_build_slice_list(struct bitfield *bf, struct peer_msg *pm, int idx)
 }
 
 int
-bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct peer_msg *pm)
+bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct peer_rcv_msg *pm)
 {
     if(!local || !peer || !pm) {
         LOG_ERROR("invalid param!\n");
@@ -247,22 +266,20 @@ bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct
             *p = (*p)->next; /* remove this one */
             free(tmp);
             continue;
-        } else if(!bitfield_piece_find(local->pieces_list, idx)){ /* downloading */
-            p = &(*p)->next; /* skip this one */
-            continue;
         } else {
             tmp = *p; 
             *p = (*p)->next; /* remove this one */
             tmp->next = local->pieces_list;
             local->pieces_list = tmp;
 
-            bitfield_build_slice_list(local, pm, tmp->idx);
-
-            return 0;
+            return bitfield_build_slice_list(local, pm, tmp->idx);
         }
     }
 
-    /* TODO select a downloading piece */
+    /* ok, we pick a downloading piece */
+    if(local->pieces_list) {
+        return bitfield_build_slice_list(local, pm, local->pieces_list->idx);
+    }
 
     return -1;
 }

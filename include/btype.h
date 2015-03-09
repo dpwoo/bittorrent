@@ -20,7 +20,9 @@ extern "C" {
 #define PEER_ID_LEN 20
 #define SHA1_LEN 20
 #define MAX_TRACKER_NUM 32
-#define MAX_PEER_NUM 50
+#define MAX_PEER_NUM 50 
+#define SLICE_SZ (16*1024)
+#define MTU_SZ (1400)
 
 enum {
     BENC_TYPE_NONE = 0,
@@ -143,14 +145,13 @@ struct slice {
     struct slice *next;
 };
 
-struct peer_msg {
+struct peer_rcv_msg {
     int rcvlen;
-    char rcvbuf[8*1024];
+    char *rcvbuf;
 
     int data_transfering;
 
     int nreq_list;
-    
     struct slice **req_tail;
     struct slice *req_list;
 
@@ -160,24 +161,33 @@ struct peer_msg {
     struct slice *wait_list;
 };
 
+struct peer_send_msg {
+    int pieceidx,piecesz;
+    char *piecedata;
+    int sliceoffset;
+    struct slice *req_list; 
+    struct slice **req_tail; 
+};
+
 struct tracker;
+struct ip_addrinfo;
 struct peer {
+    char strfaddr[32];
     int isused;
     int state;
-    int substate;
     int sockid;
     int tmrfd;
-    int ip;
-    unsigned short port;
+    int heartbeat;
     int am_unchoking;
     int am_interested;
     int peer_unchoking;
     int peer_interested;
-    int64 snd_size;
-    int64 rcv_size;
-    struct peer_msg pm;
-    struct tracker *tr;
+    struct peer_rcv_msg pm;
+    struct peer_send_msg psm;
     struct bitfield bf;
+    struct torrent_task *tsk;
+    struct peer_addrinfo *ipaddr;
+    struct pieces *having_pieces;
 };
 
 enum {
@@ -187,17 +197,14 @@ enum {
     TRACKER_STATE_WAITING_RSP,
 };
 
-struct addrinfo;
 struct tracker {
-    int sockid;
-    int tmrfd;
-    int state;
-    int url_index;
+    uint16 port;
+    int ip, annouce_time;
+    int announce_cnt;
+    int sockid, tmrfd, state;
     struct tracker_prot tp;
-    struct addrinfo *ai;
     struct torrent_task *tsk;
-    int npeer;
-    struct peer pr[MAX_PEER_NUM];
+    struct tracker *next;
 };
 
 enum {
@@ -207,18 +214,51 @@ enum {
     TASK_STATE_COMPLETE,
 };
 
+struct peer_addrinfo {
+    int ip;
+    uint16 port;
+    int64 downsz, uploadsz;
+    int next_connect_time;
+    struct peer_addrinfo *next;
+};
+
+struct peer_addrinfo_head {
+    struct peer_addrinfo *head;
+    struct peer_addrinfo **tail;
+};
+
+enum {
+    PEER_TYPE_ACTIVE_SUPER = 0,
+    PEER_TYPE_ACTIVE_NORMAL,
+    PEER_TYPE_ACTIVE_NONE,
+    PEER_TYPE_ACTIVE_NUM,
+};
+
 struct torrent_task {
     int epfd;
-    int listen_port;
+    int tmrfd;
+    uint16 listen_port;
     int task_state;
     int64 down_size;
-    struct tracker tr;
+    int leftpieces;
     struct bitfield bf;
     struct torrent_file tor;
+
+    struct pieces *havelist;
+
+    int npeer;
+    struct peer pr[MAX_PEER_NUM];
+    struct peer_addrinfo_head pr_list[PEER_TYPE_ACTIVE_NUM];
+
+    struct tracker *tr_active_list;
+    struct tracker *tr_inactive_list;
+    struct tracker **tr_inactive_list_tail;
 };
 
 struct torrent_mgr {
-    
+    int tmrfd; 
+    int ntask;
+    struct torrent_task *tsklist;
 };
 
 #ifdef __cplusplus

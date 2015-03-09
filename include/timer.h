@@ -25,10 +25,6 @@ int timer_stop(struct timer_param *tp);
 
 int timer_destroy(struct timer_param *tp);
 
-int timer_add(int epfd, struct timer_param *tp);
-
-int timer_del(int epfd, int tmrfd);
-
 #ifdef __cplusplus
 extern "C" } 
 #endif

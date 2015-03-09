@@ -8,7 +8,7 @@ extern "C" {
 #include "type.h"
 
 struct bitfield;
-struct peer_msg;
+struct peer_rcv_msg;
 
 int bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int64 totalsz);
 
@@ -18,11 +18,14 @@ int bitfield_intrested(struct bitfield *local, struct bitfield *peer);
 
 int bitfield_local_have(struct bitfield *local, int idx);
 
-int bitfield_peer_garbage_piece(struct bitfield *local, int idx);
+int bitfield_peer_giveup_piece(struct bitfield *local, int idx);
 
 int bitfield_peer_have(struct bitfield *local, struct bitfield *peer, int idx);
 
-int bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct peer_msg *pm);
+int bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer,
+                                                       struct peer_rcv_msg *pm);
+
+int bitfield_is_local_have(struct bitfield *local, int idx, int offset, int size);
 
 #ifdef __cplusplus
 extern "C" }

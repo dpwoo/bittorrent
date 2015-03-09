@@ -19,6 +19,9 @@ int utils_sha1_check(const char *buffer, int buflen, const char *sha1, int sha1l
 
 int utils_sha1_gen(const char *buffer, int buflen, char *sha1, int sha1len);
 
+struct tracker_prot;
+int utils_url_parser(const char *url, struct tracker_prot *tp);
+
 #ifdef __cplusplus
 extern "C" }
 #endif

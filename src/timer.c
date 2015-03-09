@@ -25,12 +25,12 @@ static int
 time_setting(int tmrfd, int time, int interval)
 {
     struct itimerspec itmr;
-
     itmr.it_value.tv_sec = SECOND(time);
     itmr.it_value.tv_nsec = N_SECOND(time);
+
     itmr.it_interval.tv_sec = SECOND(interval);
     itmr.it_interval.tv_nsec = N_SECOND(interval);
-    
+
     if(timerfd_settime(tmrfd, 0, &itmr, NULL)) {
         LOG_ERROR("timerfd_settime failed:%s\n", strerror(errno));
         return -1;
@@ -150,57 +150,6 @@ timer_destroy(struct timer_param *tp)
     ep.fd = tp->tmrfd;
 
     if(event_del(tp->epfd, &ep)) {
-        LOG_ERROR("timer del failed!\n");
-        return -1;
-    }
-
-    return 0;
-}
-
-int
-timer_add(int epfd, struct timer_param *tp)
-{
-    tp->epfd = epfd;
-    if(check_timer_param(tp, TIMER_OP_CREATE)) {
-        LOG_ERROR("invalid timer param!\n");
-        return -1;
-    }
-
-    int tmrfd;
-    tmrfd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK);
-    if(tmrfd < 0) {
-        LOG_ERROR("timerfd_create failed:%s\n", strerror(errno));
-        return -1;
-    }
-
-    if(time_setting(tmrfd, tp->time, tp->interval)) {
-        close(tmrfd);
-        return -1;
-    }
-
-    struct event_param ep;
-    ep.fd = tmrfd;
-    ep.event = EPOLLIN;
-    ep.evt_ctx = tp->tmr_ctx;
-    ep.evt_hdl = tp->tmr_hdl;
-
-    if(event_add(epfd, &ep)) {
-        LOG_ERROR("timer add failed!\n");
-        close(tmrfd);
-        return -1;
-    }
-
-    return tmrfd;
-}
-
-int
-timer_del(int epfd, int tmrfd)
-{
-    struct event_param ep;
-    memset(&ep, 0, sizeof(ep));
-    ep.fd = tmrfd;
-
-    if(event_del(epfd, &ep)) {
         LOG_ERROR("timer del failed!\n");
         return -1;
     }

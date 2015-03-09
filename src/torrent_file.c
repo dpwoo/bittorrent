@@ -80,7 +80,6 @@ static int
 parser_int64(struct offset *offsz, struct benc_type *bt)
 {
     if(offsz->begin >= offsz->end || offsz->begin[0] != 'i') {
-        LOG_ERROR("offsz->begin >= offsz->end || offsz->begin[0] != 'i'\n");
         return -1;
     }
 

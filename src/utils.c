@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <ctype.h>
 #include "utils.h"
 #include "log.h"
 #include "socket.h"
@@ -119,4 +120,69 @@ utils_sha1_gen(const char *buffer, int buflen, char *sha1, int sha1len)
 
     return 0;
 }
+
+int
+utils_url_parser(const char *url, struct tracker_prot *tp)
+{
+	memset(tp, 0, sizeof(*tp));
+
+	char *str = strdup(url);
+	if(!str) {
+		LOG_ERROR("out of memory!\n");
+		return -1;
+	}
+
+	char *s;
+    if(strstr(str, "http://")) {
+        s  = str + 7;
+        tp->prot_type = TRACKER_PROT_HTTP;
+    } else {
+		LOG_INFO("not support tracker proto[%s]!\n", url);
+		free(str);
+		return -1;
+    }
+
+	char *path = strchr(s, '/');
+	if(path) {
+		*path++ = '\0';
+	}
+
+	char *port = strchr(s, ':');
+	if(port) {
+		*port++ = '\0';
+		if(!isdigit(*port)) {
+			LOG_INFO("invalid url[%s]!\n", url);
+			free(str);
+			return -1;
+		}
+        tp->port = strdup(port);
+	} else {
+        tp->port = strdup("80");
+    }
+
+	tp->host = strdup(s);
+
+	if(!path || *path == '\0') {
+		tp->reqpath = strdup("/");
+	} else {
+		int slen = strlen(path);
+		char buf[slen+2];
+		snprintf(buf, sizeof(buf), "/%s", path);
+		tp->reqpath = strdup(buf);
+	}
+
+	if(!tp->host || !tp->reqpath || !tp->port) {
+		LOG_ERROR("out of memory!\n");
+		free(tp->host);
+		free(tp->reqpath);
+        free(tp->port);
+		free(str);
+		return -1;
+	}
+
+	free(str);
+
+	return 0;
+}
+
 

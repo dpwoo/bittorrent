@@ -5,7 +5,8 @@
 extern "C" {
 #endif
 
-int tracker_announce(struct torrent_task *tsk);
+struct tracker;
+int tracker_announce(struct tracker *tr);
 
 #ifdef __cplusplus
 extern "C" }

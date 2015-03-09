@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 #include "btype.h"
 #include "socket.h"
 #include "http.h"
@@ -18,38 +19,32 @@
 #include "torrent.h"
 #include "peer.h"
 #include "utils.h"
+#include "tortask.h"
 
 static int reset_tracker_members(struct tracker *tr);
-static int tracker_timer_add(struct tracker *tr);
-static int tracker_timer_del(struct tracker *tr);
-static int tracker_timeout_handle(int event, struct tracker *tr);
 
 static int tracker_add_event(int event, struct tracker *tr);
 static int tracker_mod_event(int event, struct tracker *tr);
 static int tracker_del_event(struct tracker *tr);
 
+static int tracker_destroy_timer(struct tracker *tr);
+static int tracker_stop_timer(struct tracker *tr);
+static int tracker_start_timer(struct tracker *tr);
+static int tracker_create_timer(struct tracker *tr);
+
 static int tracker_event_handle_connecting(int event, struct tracker *tr);
 static int tracker_event_handle_sendreq(int event, struct tracker *tr);
 static int tracker_event_handle_waitrsp(int event, struct tracker *tr);
-static int tracker_event_handle(int event, void *evt);
-static int tracker_parser_response(struct tracker *tr, char *rspbuf, int buflen);
 
-static int tracker_connect(struct torrent_task *tsk);
-static int tracker_try_announce(struct torrent_task *tsk);
+static int tracker_timeout_handle(int event, void *evt_ctx);
+static int tracker_event_handle(int event, void *evt);
+
+static int tracker_parser_response(struct tracker *tr, char *rspbuf, int buflen);
+static int tracker_connect(struct tracker *tr);
 
 static int
 reset_tracker_members(struct tracker *tr)
 {
-    free(tr->tp.reqpath);
-    free(tr->tp.host);
-    free(tr->tp.port);
-    memset(&tr->tp, 0, sizeof(tr->tp));
-
-    if(tr->ai) {
-        freeaddrinfo(tr->ai);
-        tr->ai = NULL;
-    }
-
     if(tr->sockid > 0) {
         close(tr->sockid);
         tr->sockid = -1;
@@ -66,50 +61,40 @@ reset_tracker_members(struct tracker *tr)
 }
 
 static int
-tracker_timeout_handle(int event, struct tracker *tr)
+tracker_timeout_handle(int event, void *evt_ctx)
 {
+    struct tracker *tr = (struct tracker *) evt_ctx;
+
     LOG_INFO("handle (%s:%s) timeout\n", tr->tp.host, tr->tp.port);
 
     long long tmrbuf;
     if(read(tr->tmrfd, &tmrbuf, sizeof(tmrbuf)) != sizeof(tmrbuf)) {
-        LOG_ALARM("read timer fd failed1\n");
+        LOG_ALARM("read timer fd failed\n");
     }
 
-    tracker_timer_del(tr);
-
+    tracker_destroy_timer(tr);
     tracker_del_event(tr);
+	reset_tracker_members(tr);
 
-    tracker_try_announce(tr->tsk);
-
-    return 0;
-}
-
-static int
-tracker_timer_add(struct tracker *tr)
-{
-    struct timer_param tp;
-    tp.time = tr->state == TRACKER_STATE_CONNECTING ? 500 : 1000;
-    tp.interval = 0;
-    tp.tmr_ctx = tr;
-    tp.tmr_hdl = (event_handle_t)tracker_timeout_handle;
-
-    if((tr->tmrfd = timer_add(tr->tsk->epfd, &tp)) < 0) {
-        LOG_ERROR("tracker add timer failed!\n");
-        return -1;
-    }
+	torrent_tracker_recycle(tr->tsk, tr, 0);
 
     return 0;
 }
 
 static int
-tracker_timer_del(struct tracker *tr)
+tracker_destroy_timer(struct tracker *tr)
 {
     if(tr->tmrfd < 0) {
         return -1;
     }
 
-    if(timer_del(tr->tsk->epfd, tr->tmrfd)) {
-        LOG_ERROR("tracker del timer failed!\n");
+    struct timer_param tp;
+    memset(&tp, 0, sizeof(tp));
+    tp.epfd = tr->tsk->epfd;
+    tp.tmrfd = tr->tmrfd;
+    
+    if(timer_destroy(&tp)) {
+        LOG_ERROR("peer destroy timer failed!\n");
         return -1;
     }
 
@@ -120,48 +105,117 @@ tracker_timer_del(struct tracker *tr)
 }
 
 static int
-tracker_connect(struct torrent_task *tsk)
+tracker_stop_timer(struct tracker *tr)
 {
-    struct tracker *tr = &tsk->tr;
-    struct torrent_file *tor = &tsk->tor;
-
-    int i = tr->url_index;
-    for(; i < tor->tracker_num; i++) {
-
-        reset_tracker_members(tr);
-
-        if(http_url_parser(tor->tracker_url[i], &tr->tp) == -1) {
-            continue;
-        }
-
-        if(tr->tp.prot_type == TRACKER_PROT_UDP) {
-            continue;
-        }
-
-        if(get_ip_address_info(&tr->tp, &tr->ai) == -1) {
-            continue;
-        }
-
-        if((tr->sockid = create_tracker_client_socket(&tr->tp, tr->ai)) < 0) {
-            continue;
-        }
-
-        int errNo = 0;
-        if(connect_tracker_server(tr->sockid, &tr->tp, tr->ai, &errNo) == -1) {
-            continue;
-        }
-
-        tr->url_index = i;
-
-        tr->state = TRACKER_STATE_SENDING_REQ;
-        if(errNo && tr->tp.prot_type != TRACKER_PROT_UDP) {
-            tr->state = TRACKER_STATE_CONNECTING;
-        }
-
-        return 0;
+    if(tr->tmrfd < 0) {
+        return -1;
     }
 
-    return -1;
+    struct timer_param tp;
+    memset(&tp, 0, sizeof(tp));
+    tp.tmrfd = tr->tmrfd;
+    
+    if(timer_stop(&tp)) {
+        LOG_ERROR("tracker stop timer failed!\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+tracker_start_timer(struct tracker *tr)
+{
+    if(tr->tmrfd < 0) {
+        return -1;
+    }
+
+    struct timer_param tp;
+    memset(&tp, 0, sizeof(tp));
+    tp.tmrfd = tr->tmrfd;
+    tp.time = 800;
+    tp.interval = 0;
+
+    if(timer_start(&tp)) {
+        LOG_ERROR("tracker start timer failed!\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+tracker_create_timer(struct tracker *tr)
+{
+    if(tr->tmrfd >= 0) {
+        LOG_ALARM("tracker tmrfd is [%d] when create timer!\n", tr->tmrfd);
+    }
+
+    struct timer_param tp;
+    memset(&tp, 0, sizeof(tp));
+    tp.epfd = tr->tsk->epfd;
+    tp.tmr_hdl = tracker_timeout_handle;
+    tp.tmr_ctx = tr;
+
+    if(timer_creat(&tp)) {
+        LOG_ERROR("tracker create timer failed!\n");
+        return -1;
+    }
+
+    tr->tmrfd = tp.tmrfd;
+
+    return 0;
+}
+
+static int
+tracker_socket_init(struct tracker *tr)
+{
+    tr->sockid = socket_tcp_create();
+    if(tr->sockid < 0) {
+        return -1;
+    }
+
+    if(set_socket_unblock(tr->sockid)) {
+        close(tr->sockid);
+        tr->sockid = -1;
+        return -1;
+    }
+
+    int res = socket_tcp_connect(tr->sockid, tr->ip, tr->port);
+    if(!res) {
+        LOG_DEBUG("%s:%s connecting...ok!\n", tr->tp.host, tr->tp.port);
+		tr->state = TRACKER_STATE_SENDING_REQ;
+    } else if(errno == EINPROGRESS) {
+        LOG_DEBUG("%s:%s connecting...in progress!\n", tr->tp.host, tr->tp.port);
+		tr->state = TRACKER_STATE_CONNECTING;
+    } else {
+        close(tr->sockid);
+        tr->sockid = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+tracker_connect(struct tracker *tr)
+{
+	reset_tracker_members(tr);
+
+	if(tr->tp.prot_type == TRACKER_PROT_UDP) {
+		LOG_ERROR("tracker not support udp[%s:%s] protocol currently!\n", tr->tp.host, tr->tp.port);
+		return -1;
+	}
+
+	if(!tr->ip && get_ip_address_info(&tr->tp, &tr->ip, &tr->port) == -1) {
+		return -1;
+	}
+
+	if(tracker_socket_init(tr)) {
+		return -1;
+	}
+
+	return 0;
 }
 
 static int
@@ -210,44 +264,6 @@ tracker_del_event(struct tracker *tr)
         LOG_ERROR("tracker del event failed!\n");
     }
 
-    close(tr->sockid);
-    tr->sockid = -1;
-
-    return 0;
-}
-
-static int
-tracker_try_announce(struct torrent_task *tsk)
-{
-    tsk->tr.url_index++;
-    return tracker_announce(tsk);
-}
-
-int
-tracker_announce(struct torrent_task *tsk)
-{
-    struct tracker *tr;
-    
-    tr = &tsk->tr;
-    tr->tsk = tsk;
-
-    if(tracker_connect(tsk)) {
-        LOG_INFO("tracker_connect failed!\n");
-        return -1;
-    }
-
-    if(tracker_add_event(EPOLLIN | EPOLLOUT, tr)) {
-        LOG_ERROR("tracker(%s:%s)add event failed!\n", tr->tp.host, tr->tp.prot_type);
-        reset_tracker_members(tr);
-        return -1;
-    }
-
-    if(tr->state == TRACKER_STATE_CONNECTING) {
-        if(tracker_timer_add(tr)) {
-            LOG_ERROR("tracker(%s:%s)start timer failed!\n", tr->tp.host, tr->tp.prot_type);
-        }
-    }
-
     return 0;
 }
 
@@ -259,6 +275,8 @@ tracker_parser_bencode(struct tracker *tr, struct benc_type *bt)
         LOG_ERROR("no found interval key!\n");
         return -1;
     }
+
+	tr->annouce_time = time(NULL) + interval;
 
     int buflen;
     char *peers;
@@ -278,7 +296,8 @@ tracker_parser_bencode(struct tracker *tr, struct benc_type *bt)
     int incomplete = 0;
     handle_int_kv(bt, "incomplete", &incomplete);
 
-    LOG_DEBUG("interval:%d, complete:%d, incomplete:%d\n", interval, complete, incomplete);
+    LOG_DEBUG("interval:%d, complete:%d, incomplete:%d, sendme[%d]\n",
+                                            interval, complete, incomplete, buflen/6);
     
     int i, npeer = buflen / 6;
     for(i = 0; i < npeer; i++) {
@@ -287,9 +306,7 @@ tracker_parser_bencode(struct tracker *tr, struct benc_type *bt)
         utils_strf_addrinfo(*(int *)peer, *(unsigned short *)(peer+4), peeraddr, 32);
         LOG_DEBUG("peer[%s]\n", peeraddr);
 
-        if(tr->npeer < MAX_PEER_NUM && !peer_init(tr, peer)) {
-            tr->npeer++;
-        }
+		torrent_add_peer_addrinfo(tr->tsk, peer);
     }
 
     return 0;
@@ -320,7 +337,6 @@ tracker_parser_response(struct tracker *tr, char *rspbuf, int buflen)
     }
 
     if(tracker_parser_bencode(tr, &bt)) {
-        LOG_DUMP(rspbuf, buflen, "tracker parser failed:");
         // destroy_dict(&bt);
         return -1;
     }
@@ -333,34 +349,23 @@ tracker_parser_response(struct tracker *tr, char *rspbuf, int buflen)
 static int
 tracker_event_handle_connecting(int event, struct tracker *tr)
 {
-    struct torrent_task *tsk;
-
-    tsk = tr->tsk;
-
     if(event & EPOLLOUT) {
 
-        tracker_timer_del(tr);
+        tracker_stop_timer(tr);
 
         int errNo = 0;
         if(get_socket_opt(tr->sockid, SO_ERROR, &errNo)) {
             LOG_ERROR("get_socket_opt failed:%s\n", strerror(errno));
-            return -1;
+			goto FAILED;
         }
 
         if(errNo) {
-            LOG_INFO("connect (%s:%s): %s\n", tr->tp.host, tr->tp.port, strerror(errNo));
-            tracker_del_event(tr);
+            LOG_INFO("(%s:%s)connect: %s\n", tr->tp.host, tr->tp.port, strerror(errNo));
             tr->state = TRACKER_STATE_NONE;
-            if(++tr->url_index < tsk->tor.tracker_num) {
-                LOG_INFO("try another announce!\n");
-                return tracker_try_announce(tsk);
-            } else {
-                LOG_INFO("try all announce and failed!\n");
-            }
-            return -1;
+			goto FAILED;
         }
 
-        LOG_INFO("connect (%s:%s) ok.\n", tr->tp.host, tr->tp.port);
+        LOG_INFO("(%s:%s)connect ok.\n", tr->tp.host, tr->tp.port);
 
         tr->state = TRACKER_STATE_SENDING_REQ;
         tracker_mod_event(EPOLLIN|EPOLLOUT, tr);
@@ -370,7 +375,12 @@ tracker_event_handle_connecting(int event, struct tracker *tr)
 
     LOG_ERROR("no expected event[%d] in connecting state!\n", event);
 
-    return -1;
+FAILED:
+    tracker_destroy_timer(tr);
+    tracker_del_event(tr);
+	reset_tracker_members(tr);
+	torrent_tracker_recycle(tr->tsk, tr, 0);
+	return -1;
 }
 
 static int
@@ -380,23 +390,29 @@ tracker_event_handle_sendreq(int event, struct tracker *tr)
         LOG_ALARM("recv read event in %d state!\n", tr->state);
     }
 
+    tracker_stop_timer(tr);
+
     if(event & EPOLLOUT) {
         if(http_request(tr)) {
             LOG_DEBUG("send request (%s:%s)failed!\n", tr->tp.host, tr->tp.port);
-            tracker_del_event(tr);
             tr->state = TRACKER_STATE_NONE;
-            if(tracker_try_announce(tr->tsk)) {
-                LOG_INFO("connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);
-            }
-            return 0;
+			goto FAILED;
         }
-        LOG_DEBUG("send request (%s:%s)OK!\n", tr->tp.host, tr->tp.port);
+        LOG_DEBUG("send request (%s:%s)ok!\n", tr->tp.host, tr->tp.port);
         tr->state = TRACKER_STATE_WAITING_RSP;
         tracker_mod_event(EPOLLIN, tr);
-        tracker_timer_add(tr);
     }
 
+    tracker_start_timer(tr);
+
     return 0;
+
+FAILED:
+    tracker_destroy_timer(tr);
+    tracker_del_event(tr);
+	reset_tracker_members(tr);
+	torrent_tracker_recycle(tr->tsk, tr, 0);
+	return -1;
 }
 
 static int
@@ -406,6 +422,9 @@ tracker_event_handle_waitrsp(int event, struct tracker *tr)
         LOG_ALARM("recv write event in %d state!\n", tr->state);
     }
 
+    tracker_destroy_timer(tr);
+    tracker_del_event(tr);
+
     if(event & EPOLLIN) {
 
         struct http_rsp_buf rspbuf;
@@ -413,38 +432,30 @@ tracker_event_handle_waitrsp(int event, struct tracker *tr)
 
         int res = http_response(tr, &rspbuf);
 
-        tracker_timer_del(tr);
-        tracker_del_event(tr);
-
         if(res) {
             LOG_DEBUG("recv response(%s:%s)failed!\n", tr->tp.host, tr->tp.port);
-            reset_tracker_members(tr);
-            if(tracker_try_announce(tr->tsk)) {
-                LOG_INFO("can't connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);
-            }
+        	free(rspbuf.rcvbuf);
+			goto FAILED;
         } else {
             LOG_DEBUG("recv response(%s:%s)OK!\n", tr->tp.host, tr->tp.port);
             if(tracker_parser_response(tr, rspbuf.body, rspbuf.bodysz)) {
-                /*
-                reset_tracker_members(tr);
-                if(tracker_try_announce(tr->tsk)) {
-                    LOG_INFO("can't connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);
-                }
-                */
-            }
+        		free(rspbuf.rcvbuf);
+				goto FAILED;
+            } else {
+        		free(rspbuf.rcvbuf);
+			}
         }
-
-        free(rspbuf.rcvbuf);
-#if 1
-        reset_tracker_members(tr);
-        if(tracker_try_announce(tr->tsk)) {
-            LOG_INFO("can't connect tracker for torrent[%s]\n", tr->tsk->tor.torfile);
-        }
-#endif
-
     }
 
+    tr->announce_cnt++;
+	reset_tracker_members(tr);
+	torrent_tracker_recycle(tr->tsk, tr, 1);
     return 0;
+
+FAILED:
+	reset_tracker_members(tr);
+	torrent_tracker_recycle(tr->tsk, tr, 0);
+	return -1;
 }
 
 static int
@@ -465,5 +476,47 @@ tracker_event_handle(int event, void *evt)
             break;
     }
     return -1;
+}
+
+int
+tracker_announce(struct tracker *tr)
+{
+    tr->sockid = -1;
+    tr->tmrfd = -1;
+
+    int active = 0;
+
+    if(tracker_connect(tr)) {
+        LOG_INFO("tracker(%s:%s) connect failed!\n", tr->tp.host, tr->tp.port);
+        active = 2;
+		goto FAILED;
+    }
+
+    if(tracker_add_event(EPOLLIN | EPOLLOUT, tr)) {
+        LOG_ERROR("tracker(%s:%s)add event failed!\n", tr->tp.host, tr->tp.port);
+		goto FAILED;
+    }
+
+    if(tracker_create_timer(tr)) {
+        LOG_ERROR("tracker(%s:%s)create timer failed!\n", tr->tp.host, tr->tp.port);
+        tracker_del_event(tr);
+        goto FAILED;
+    }
+
+    if(tr->state == TRACKER_STATE_CONNECTING) {
+        if(tracker_start_timer(tr)) {
+            LOG_ERROR("tracker(%s:%s)start timer failed!\n", tr->tp.host, tr->tp.prot_type);
+            tracker_destroy_timer(tr);
+			tracker_del_event(tr);
+            goto FAILED;
+        }
+    }
+
+    return 0;
+
+FAILED:
+	reset_tracker_members(tr);
+	torrent_tracker_recycle(tr->tsk, tr, active);
+	return -1;
 }
 

@@ -5,8 +5,8 @@
 extern "C" {
 #endif
 
-struct tracker;
-int peer_init(struct tracker *tr, char *addrinfo);
+int peer_init(struct peer *tr);
+int peer_modify_timer_time(struct peer *pr, int time);
 
 #ifdef __cplusplus
 extern "C" }
