@@ -35,14 +35,13 @@ enum {
 struct benc_type {
     int type;
     union{
-        int b;
         int64 i;
-        double d;
         struct {
             int len;
             char *s;
         }str;
-        struct {// for list and dictionary
+        /* for list and dictionary */
+        struct {
             char *begin, *end;
             int nlist, alloced;
             struct benc_type *vals;
@@ -172,7 +171,6 @@ struct peer_send_msg {
 struct tracker;
 struct ip_addrinfo;
 struct peer {
-    char strfaddr[32];
     int isused;
     int state;
     int sockid;
@@ -182,6 +180,8 @@ struct peer {
     int am_interested;
     int peer_unchoking;
     int peer_interested;
+    char strfaddr[32];
+    char peerid[PEER_ID_LEN];
     struct peer_rcv_msg pm;
     struct peer_send_msg psm;
     struct bitfield bf;
@@ -192,9 +192,17 @@ struct peer {
 
 enum {
     TRACKER_STATE_NONE = 0,
+
     TRACKER_STATE_CONNECTING,
     TRACKER_STATE_SENDING_REQ,
     TRACKER_STATE_WAITING_RSP,
+
+    TRACKER_STATE_UDP_CONNECT_REQ,
+    TRACKER_STATE_UDP_CONNECT_RSP,
+    TRACKER_STATE_UDP_ANNOUNCE_REQ,
+    TRACKER_STATE_UDP_ANNOUNCE_RSP,
+    TRACKER_STATE_UDP_SCRAPE_REQ,
+    TRACKER_STATE_UDP_SCRAPE_RSP,
 };
 
 struct tracker {
@@ -202,6 +210,8 @@ struct tracker {
     int ip, annouce_time;
     int announce_cnt;
     int sockid, tmrfd, state;
+    int transaction_id, connect_cnt;
+    int64 conn_id;
     struct tracker_prot tp;
     struct torrent_task *tsk;
     struct tracker *next;
@@ -215,7 +225,7 @@ enum {
 };
 
 struct peer_addrinfo {
-    int ip;
+    int client, ip;
     uint16 port;
     int64 downsz, uploadsz;
     int next_connect_time;
@@ -236,7 +246,7 @@ enum {
 
 struct torrent_task {
     int epfd;
-    int tmrfd;
+    int listenfd, tmrfd;
     uint16 listen_port;
     int task_state;
     int64 down_size;
@@ -260,6 +270,8 @@ struct torrent_mgr {
     int ntask;
     struct torrent_task *tsklist;
 };
+
+extern char peer_id[];
 
 #ifdef __cplusplus
 extern "C" }

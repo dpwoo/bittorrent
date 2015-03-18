@@ -11,6 +11,7 @@
 #include "log.h"
 #include "socket.h"
 #include "sha1.h"
+#include "mempool.h"
 
 int
 utils_enlarge_space(char **dst, int *dstlen, int step)
@@ -20,7 +21,7 @@ utils_enlarge_space(char **dst, int *dstlen, int step)
     }
 
     char *tmp;
-    if((tmp = realloc(*dst, *dstlen + step))) {
+    if((tmp = GREALLOC(*dst, *dstlen + step))) {
         *dst = tmp;
         *dstlen += step;
     }
@@ -126,7 +127,7 @@ utils_url_parser(const char *url, struct tracker_prot *tp)
 {
 	memset(tp, 0, sizeof(*tp));
 
-	char *str = strdup(url);
+	char *str = GSTRDUP(url);
 	if(!str) {
 		LOG_ERROR("out of memory!\n");
 		return -1;
@@ -136,9 +137,12 @@ utils_url_parser(const char *url, struct tracker_prot *tp)
     if(strstr(str, "http://")) {
         s  = str + 7;
         tp->prot_type = TRACKER_PROT_HTTP;
+    } else if(strstr(str, "udp://")) {
+        s = str + 6; 
+        tp->prot_type = TRACKER_PROT_UDP;
     } else {
 		LOG_INFO("not support tracker proto[%s]!\n", url);
-		free(str);
+		GFREE(str);
 		return -1;
     }
 
@@ -152,37 +156,36 @@ utils_url_parser(const char *url, struct tracker_prot *tp)
 		*port++ = '\0';
 		if(!isdigit(*port)) {
 			LOG_INFO("invalid url[%s]!\n", url);
-			free(str);
+			GFREE(str);
 			return -1;
 		}
-        tp->port = strdup(port);
+        tp->port = GSTRDUP(port);
 	} else {
-        tp->port = strdup("80");
+        tp->port = GSTRDUP("80");
     }
 
-	tp->host = strdup(s);
+	tp->host = GSTRDUP(s);
 
 	if(!path || *path == '\0') {
-		tp->reqpath = strdup("/");
+		tp->reqpath = GSTRDUP("/");
 	} else {
 		int slen = strlen(path);
 		char buf[slen+2];
 		snprintf(buf, sizeof(buf), "/%s", path);
-		tp->reqpath = strdup(buf);
+		tp->reqpath = GSTRDUP(buf);
 	}
 
 	if(!tp->host || !tp->reqpath || !tp->port) {
 		LOG_ERROR("out of memory!\n");
-		free(tp->host);
-		free(tp->reqpath);
-        free(tp->port);
-		free(str);
+		GFREE(tp->host);
+		GFREE(tp->reqpath);
+        GFREE(tp->port);
+		GFREE(str);
 		return -1;
 	}
 
-	free(str);
+	GFREE(str);
 
 	return 0;
 }
-
 

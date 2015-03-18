@@ -7,8 +7,7 @@
 #include "socket.h"
 #include "http.h"
 #include "log.h"
-
-char peer_id[PEER_ID_LEN + 1] = "_wudongpeng_2015_02_";
+#include "mempool.h"
 
 static int
 is_rfc2396_alnum (char ch)
@@ -48,18 +47,17 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             "%s"\
             "?info_hash=%s"\
             "&peer_id=%s"\
-            "&port=%hd"\
+            "&port=%hu"\
             "&uploaded=%lld"\
             "&downloaded=%lld"\
             "&left=%lld"\
-            "&compact=%d"\
-            "&event=%s"
+            "&compact=%d"
 
     char escape_info_hash[SHA1_LEN*3 + 1];
 
     http_escape_info_hash(tr->tsk->tor.info_hash, escape_info_hash);
 
-    snprintf(uribuf, buflen,
+    int wlen = snprintf(uribuf, buflen,
             URI_FMT_PARAM,
             tr->tp.reqpath, 
             escape_info_hash,
@@ -68,9 +66,16 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             (int64)0,
             (int64)0,
             (int64)tr->tsk->leftpieces * tr->tsk->tor.piece_len,
-            1,
-            tr->announce_cnt ? "" : "started"
+            1
             );
+
+    if(!tr->announce_cnt) {
+        wlen += snprintf(uribuf+wlen, buflen-wlen, "&event=%s", "started"); 
+    }
+
+#if 0
+    wlen += snprintf(uribuf+wlen, buflen-wlen, "&numwant=%d", 200);
+#endif
 
 #if 0
     LOG_DEBUG("tracker uri:%s\n", uribuf);
@@ -120,7 +125,7 @@ static int
 enlarge_response_space(char **dst, int *dstlen)
 {
     char *tmp;
-    if((tmp = realloc(*dst, *dstlen + 1024))) {
+    if((tmp = GREALLOC(*dst, *dstlen + 1024))) {
         *dst = tmp;
         *dstlen += 1024;
     }
@@ -167,7 +172,7 @@ http_status_line(char *rspbuf, int rsplen)
 {
     char *buf, *s;
     
-    if(!(buf = malloc(rsplen+1))) {
+    if(!(buf = GMALLOC(rsplen+1))) {
         LOG_ERROR("out of memory!\n");
         return -1;
     }
@@ -175,7 +180,7 @@ http_status_line(char *rspbuf, int rsplen)
     buf[rsplen] = '\0';
 
     if(!(s = strstr(buf, "HTTP/1.0")) &&  !(s = strstr(buf, "HTTP/1.1")) ) {
-        free(buf);
+        GFREE(buf);
         return -1;
     }
 
@@ -185,11 +190,11 @@ http_status_line(char *rspbuf, int rsplen)
     int status = strtol(s, NULL, 10);
     if(errno || status != 200) {
         LOG_INFO("tracker http status %d\n", status);
-        free(buf);
+        GFREE(buf);
         return -1;
     }
 
-    free(buf);
+    GFREE(buf);
 
     return 0;
 }
@@ -199,7 +204,7 @@ http_get_content_length(char *rspbuf, int rsplen)
 {
     char *buf, *s;
     
-    if(!(buf = malloc(rsplen + 1))) {
+    if(!(buf = GMALLOC(rsplen + 1))) {
         LOG_ERROR("out of memory!\n");
         return -1;
     }
@@ -208,7 +213,7 @@ http_get_content_length(char *rspbuf, int rsplen)
 
 #define CONTENT_LENGTH "Content-Length:"
     if(!(s = strstr(buf, CONTENT_LENGTH))) {
-        free(buf);
+        GFREE(buf);
         return -1;
     }
 
@@ -217,11 +222,11 @@ http_get_content_length(char *rspbuf, int rsplen)
     errno = 0;
     int con_len = strtol(s, NULL, 10);
     if(errno) {
-        free(buf);
+        GFREE(buf);
         return -1;
     }
 
-    free(buf);
+    GFREE(buf);
 
     return con_len;
 }
@@ -232,7 +237,7 @@ http_have_head(char *rspbuf, int rsplen)
     char *s = rspbuf;
     char *bufend = s + rsplen;
 
-    while((s = memchr(s, '\r', bufend - s))) {
+    while(s < bufend && (s = memchr(s, '\r', bufend - s))) {
         if((s+4) < bufend && s[0] == '\r' && s[1] == '\n' && s[2] == '\r' && s[3] == '\n') {
             return s+4 - rspbuf;
         }

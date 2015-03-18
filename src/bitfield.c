@@ -4,6 +4,7 @@
 #include "btype.h"
 #include "bitfield.h"
 #include "log.h"
+#include "mempool.h"
 
 static int bitfield_piece_insert_by_sort(struct pieces **list, struct pieces *node);
 static int bitfield_piece_remove(struct pieces **p, int idx);
@@ -23,7 +24,7 @@ bitfield_create(struct bitfield *bf, int pieces_num, int piece_sz, int64 totalsz
     bf->totalsz = totalsz;
     bf->piecesz = piece_sz;
 
-    bf->bitmap = calloc(1, bf->nbyte);
+    bf->bitmap = GCALLOC(1, bf->nbyte);
     if(!bf->bitmap) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -67,7 +68,7 @@ bitfield_intrested(struct bitfield *local, struct bitfield *peer)
         for(k = 7; c3 && k >= 0; k--) {
             if(c3 & (1<<k)) {
                 idx = (i*8)+(7-k);
-                if(!(tmp = calloc(1, sizeof(*tmp)))) {
+                if(!(tmp = GCALLOC(1, sizeof(*tmp)))) {
                     goto MEM_FAILED;
                 }
                 tmp->idx = idx;
@@ -84,7 +85,7 @@ MEM_FAILED:
     while(peer->pieces_list) {
         tmp = peer->pieces_list;
         peer->pieces_list = tmp->next;
-        free(tmp);
+        GFREE(tmp);
     }
     return 0;
 }
@@ -108,6 +109,8 @@ bitfield_local_have(struct bitfield *local, int idx)
         return -1;
     }
 
+    bitfield_piece_remove(&local->pieces_list, idx);
+
     int pidx = idx >> 3; /* idx/8 */
     int bidx = idx & 7;  /* idx%8 */
     unsigned char *byte = (unsigned char *)&local->bitmap[pidx];
@@ -115,8 +118,6 @@ bitfield_local_have(struct bitfield *local, int idx)
         LOG_DEBUG("local alread have id[%d]\n", idx);
         return -1;
     }
-
-    bitfield_piece_remove(&local->pieces_list, idx);
 
     *byte |= (1 << (7-bidx));
 
@@ -158,7 +159,7 @@ bitfield_peer_have(struct bitfield *local, struct bitfield *peer, int idx)
         return -1; /* we already have this piece */
     }
 
-    struct pieces *p = calloc(1, sizeof(*p));
+    struct pieces *p = GCALLOC(1, sizeof(*p));
     if(!p) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -188,7 +189,7 @@ bitfield_piece_remove(struct pieces **p, int idx)
         if((*p)->idx == idx) {
             struct pieces *tmp = *p;
             *p = tmp->next;
-            free(tmp);
+            GFREE(tmp);
             return 0;
         }
     }
@@ -225,7 +226,7 @@ bitfield_build_slice_list(struct bitfield *bf, struct peer_rcv_msg *pm, int idx)
     pm->req_tail = &pm->req_list;
     pm->req_list = NULL;
 
-    pm->wait_list = calloc(nslice, sizeof(struct slice)); 
+    pm->wait_list = GCALLOC(nslice, sizeof(struct slice)); 
     if(!pm->wait_list) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -261,17 +262,17 @@ bitfield_get_request_piece(struct bitfield *local, struct bitfield *peer, struct
         int bidx = idx & 7;  /* idx%8 */
         unsigned char byte = local->bitmap[pidx];
 
-        if( (byte & (1 << (7-bidx))) ) { /* local alread have */
+        if(byte & (1 << (7-bidx))) { /* local alread have */
             tmp = *p;
-            *p = (*p)->next; /* remove this one */
-            free(tmp);
-            continue;
+            *p = (*p)->next; /* remove it */
+            GFREE(tmp);
+        } else if(!bitfield_piece_find(local->pieces_list, idx)) { /* skip downloading */
+            p = &(*p)->next; 
         } else {
             tmp = *p; 
-            *p = (*p)->next; /* remove this one */
+            *p = (*p)->next; /* move it to downloading list */
             tmp->next = local->pieces_list;
             local->pieces_list = tmp;
-
             return bitfield_build_slice_list(local, pm, tmp->idx);
         }
     }

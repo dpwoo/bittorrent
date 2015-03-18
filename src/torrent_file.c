@@ -12,17 +12,16 @@
 #include "torrent.h"
 #include "utils.h"
 #include "log.h"
+#include "mempool.h"
 
 #define ARRAY_ENLARGE_STEP (8)
 
-/* previous declaration */
-//static int parser_dict(struct offset *offsz, struct benc_type *bt);
 static int parser_list(struct offset *offsz, struct benc_type *bt);
-static int parser_int(struct offset *offsz, struct benc_type *bt);
 static int parser_int64(struct offset *offsz, struct benc_type *bt);
 static int parser_string(struct offset *offsz, struct benc_type *bt);
 static int parser_key(struct offset *offsz, struct benc_type *bt);
 static int parser_value(struct offset *offsz, struct benc_type *bt);
+static int destroy_list(struct benc_type *bt);
 
 static int
 enlarge_array(struct benc_type *bt)
@@ -33,7 +32,7 @@ enlarge_array(struct benc_type *bt)
     int k = (bt->type == BENC_TYPE_DICT ? 2 : 1);
 
     if(nlist + k > alloced) {
-        mem = realloc(mem, sizeof(*bt) * (nlist + ARRAY_ENLARGE_STEP));
+        mem = GREALLOC(mem, sizeof(*bt) * (nlist + ARRAY_ENLARGE_STEP));
         if(!mem) {
             LOG_ERROR("out of memory!\n");
             return -1;
@@ -42,37 +41,6 @@ enlarge_array(struct benc_type *bt)
         bt->val.list.vals = (struct benc_type *)mem;
         bt->val.list.alloced = nlist+ARRAY_ENLARGE_STEP;
     }
-    return 0;
-}
-
-static int
-parser_int(struct offset *offsz, struct benc_type *bt)
-{
-    if(offsz->begin >= offsz->end || offsz->begin[0] != 'i') {
-        LOG_ERROR("offsz->begin >= offsz->end || offsz->begin[0] != 'i'\n");
-        return -1;
-    }
-
-    offsz->begin++;
-
-    if(offsz->begin >= offsz->end) { /* || !isdigit(offsz->begin[0])) { */
-        LOG_ERROR("[%x,%x]%.20s\n", offsz->begin, offsz->end, offsz->begin-1);
-        return -1;
-    }
-
-    char *ptr;
-    errno = 0;
-    int digit = (int)strtoll(offsz->begin, &ptr, 10);
-    if(errno || ptr[0] != 'e') {
-        LOG_ERROR("strtol[%.20s]:%s!\n", offsz->begin, strerror(errno));
-        return -1;
-    }
-
-    offsz->begin = ptr+1;
-
-    bt->type = BENC_TYPE_INT;
-    bt->val.i = digit;
-
     return 0;
 }
 
@@ -115,14 +83,14 @@ parser_string(struct offset *offsz, struct benc_type *bt)
     }
     
     if(!isdigit(offsz->begin[0])) {
-        LOG_ERROR("not a digit\n");
+        LOG_ERROR("str no begin with a digit\n");
         return -1;
     }
 
     char *ptr;
     errno = 0;
     int strlen = (int)strtoll(offsz->begin, &ptr, 10);
-    if(errno || strlen < 0 || ptr[0] != ':') { // strlen can be zero
+    if(errno || strlen < 0 || ptr[0] != ':') { /* strlen can be zero */
         LOG_ERROR("strtol %s\n", strerror(errno));
         return -1;
     }
@@ -133,7 +101,7 @@ parser_string(struct offset *offsz, struct benc_type *bt)
         return -1;
     }
 
-    char *str = malloc(strlen+1);
+    char *str = GMALLOC(strlen+1);
     if(!str) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -245,6 +213,64 @@ parser_dict(struct offset *offsz, struct benc_type *bt)
     return -1;
 }
 
+static int
+destroy_list(struct benc_type *bt)
+{
+    int i;
+    for(i = 0; i < bt->val.list.nlist; i++) {
+        struct benc_type *b = bt->val.list.vals + i;
+        switch(b->type) {
+            case BENC_TYPE_INT:
+                break;
+            case BENC_TYPE_STRING:
+                GFREE(b->val.str.s);
+                break;
+            case BENC_TYPE_LIST:
+                destroy_list(b);
+                break;
+            case BENC_TYPE_DICT:
+                destroy_dict(b);
+                break;
+            default:
+                break;
+        }
+    }
+    GFREE(bt->val.list.vals);
+    bt->val.list.vals = NULL;
+    bt->val.list.nlist = 0;
+    return 0;
+}
+
+int
+destroy_dict(struct benc_type *bt)
+{
+    int i;
+    for(i = 0; i < bt->val.list.nlist; i += 2) {
+        struct benc_type *b1 = bt->val.list.vals + i;
+        struct benc_type *b2 = bt->val.list.vals + i + 1;
+        GFREE(b1->val.str.s);
+        switch(b2->type) {
+            case BENC_TYPE_INT:
+                break;
+            case BENC_TYPE_STRING:
+                GFREE(b2->val.str.s);
+                break;
+            case BENC_TYPE_LIST:
+                destroy_list(b2);
+                break;
+            case BENC_TYPE_DICT:
+                destroy_dict(b2);
+                break;
+            default:
+                break;
+        }
+    }
+    GFREE(bt->val.list.vals);
+    bt->val.list.vals = NULL;
+    bt->val.list.nlist = 0;
+    return 0;
+}
+
 static void dump_benc_type(struct benc_type *bt)
 {
     int i;
@@ -253,12 +279,6 @@ static void dump_benc_type(struct benc_type *bt)
               LOG_DEBUG("int:%ld\n", bt->val.i);
               break;
         case BENC_TYPE_STRING:
-              //LOG_DEBUG("str:");
-              for(i = 0; i < bt->val.str.len; i++) {
-                  //LOG_DEBUG("%c", bt->val.str.s[i]);
-                  //if(i > 64) break;
-              }
-              //LOG_DEBUG("\n");
               LOG_DEBUG("str[%d]: %s\n", bt->val.str.len, bt->val.str.s);
               break;
         case BENC_TYPE_LIST:
@@ -333,7 +353,7 @@ do_torfile_parser(char *bufbegin, size_t filesz, struct torrent_file *tor)
 int
 torrent_file_parser(char *torfile, struct torrent_file *tor)
 {
-    if(!(tor->torfile = strdup(torfile))) {
+    if(!(tor->torfile = GSTRDUP(torfile))) {
         LOG_ERROR("strdup fained!\n");
         return -1;
     }

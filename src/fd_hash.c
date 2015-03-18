@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "fd_hash.h"
+#include "mempool.h"
 #include "log.h"
 
 struct hash_slot {
@@ -26,9 +27,9 @@ fd_hash_add(int fd, void *usrctx)
     }
 
     struct hash_slot *hs;
-    hs = malloc(sizeof(*hs));
+    hs = GMALLOC(sizeof(*hs));
     if(!hs) {
-        LOG_ERROR("%s:out of memory!\n", __func__);
+        LOG_ERROR("out of memory!\n");
         return -1;
     }
 
@@ -74,7 +75,7 @@ fd_hash_del(int fd)
         if((*hs)->fd == fd) {
             del = (*hs);
             *hs = (*hs)->next;
-            free(del);
+            GFREE(del);
             fd_hash.used--;
             return 0; 
         }

@@ -152,6 +152,18 @@ socket_tcp_recv(int sfd, char *buf, int buflen, int flags)
 }
 
 int
+socket_udp_send(int sfd, char *buf, int buflen, int flags)
+{
+    return send(sfd, buf, buflen, flags);
+}
+
+int
+socket_udp_recv(int sfd, char *buf, int buflen, int flags)
+{
+    return recv(sfd, buf, buflen, flags);
+}
+
+int
 socket_tcp_create(void)
 {
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -164,7 +176,19 @@ socket_tcp_create(void)
 }
 
 int
-socket_tcp_connect(int sock, int ip, unsigned short port)
+socket_udp_create(void)
+{
+    int sfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(sfd < 0) {
+        LOG_ERROR("socket:%s\n", strerror(errno));
+        return -1;
+    }
+
+    return sfd;
+}
+
+int
+socket_tcp_connect(int sock, int ip, uint16 port)
 {
     struct sockaddr_in sa;
 
@@ -174,6 +198,95 @@ socket_tcp_connect(int sock, int ip, unsigned short port)
     sa.sin_addr.s_addr = ip;
 
     return connect(sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+int
+socket_udp_connect(int sock, int ip, uint16 port)
+{
+    return socket_tcp_connect(sock, ip, port);
+}
+
+int
+socket_tcp_bind(int sock, int ip, uint16 port)
+{
+    struct sockaddr_in sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = !ip ? socket_htonl(INADDR_ANY) : ip;
+    sa.sin_port = port;
+
+    return bind(sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+int
+socket_tcp_listen(int sock, int backlog)
+{
+    return listen(sock, backlog);
+}
+
+int
+socket_tcp_accept(int sock, int *ip, uint16 *port)
+{
+    struct sockaddr_in sa;
+    socklen_t slen = sizeof(sa);
+
+    memset(&sa, 0, sizeof(sa));
+
+    int clisock = accept(sock, (struct sockaddr *)&sa, &slen);
+    if(clisock < 0) {
+        return -1;
+    }
+
+    if(ip) {
+        *ip = sa.sin_addr.s_addr;
+    }
+
+    if(port) {
+        *port = sa.sin_port;
+    }
+
+    return clisock;
+}
+
+uint64
+socket_hton64(uint64 host)
+{
+    uint64 net;
+    
+    char *h = (char *)&host;
+    char *n = (char *)&net;
+
+    n[7] = h[0];
+    n[6] = h[1];
+    n[5] = h[2];
+    n[4] = h[3];
+    n[3] = h[4];
+    n[2] = h[5];
+    n[1] = h[6];
+    n[0] = h[7];
+
+    return net;
+}
+
+uint64
+socket_ntoh64(uint64 net)
+{
+    uint64 host;
+    
+    char *n = (char *)&net;
+    char *h = (char *)&host;
+
+    h[7] = n[0];
+    h[6] = n[1];
+    h[5] = n[2];
+    h[4] = n[3];
+    h[3] = n[4];
+    h[2] = n[5];
+    h[1] = n[6];
+    h[0] = n[7];
+
+    return host;
 }
 
 unsigned int

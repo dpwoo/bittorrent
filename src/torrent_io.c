@@ -8,13 +8,14 @@
 #include "btype.h"
 #include "utils.h"
 #include "log.h"
+#include "mempool.h"
 
 #define DOWNLOAD_DIR "./download/"
 
 static int
 torrent_create_dir(const char *dirname)
 {
-    char command[2048];
+    char command[1024];
     /* 'dirname' in case space etc character when create dir */
     snprintf(command, sizeof(command), "%s %s%s%s", "mkdir -p", "\'", dirname, "\'"); 
     int ret = system(command);
@@ -142,7 +143,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         buflen = last_piecesz ? last_piecesz : tsk->tor.piece_len;
     }
 
-    char *buffer = malloc(buflen);
+    char *buffer = GMALLOC(buflen);
     if(!buffer) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -153,7 +154,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
         int ret = torrent_read_single_file(NULL, NULL, tsk->tor.pathname,
                                          offset, buffer, buflen);
         if(ret) {
-            free(buffer);
+            GFREE(buffer);
             return -1;
         }
         *setme_buffer = buffer;
@@ -185,7 +186,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
 
     if(torrent_read_single_file(tsk->tor.pathname, sfile[i].subdir, sfile[i].pathname,
                                             offset-invalid_offset, buffer, readsz)) {
-        free(buffer);
+        GFREE(buffer);
         return -1; 
     }
 
@@ -199,7 +200,7 @@ torrent_read_piece(struct torrent_task *tsk, int pieceid, char **setme_buffer, i
 
         if(torrent_read_single_file(tsk->tor.pathname, sfile[i].subdir, sfile[i].pathname,
                                             0, buffer+bufoffset, readsz)) {
-            free(buffer);
+            GFREE(buffer);
             return -1;
         }
 
@@ -313,10 +314,10 @@ torrent_check_downfiles_bitfield(struct torrent_task *tsk)
         }
 
         if(utils_sha1_check(buffer, buflen, &tsk->tor.pieces[idx*20], 20)) {
-            free(buffer);
+            GFREE(buffer);
             continue;
         }
-        free(buffer);
+        GFREE(buffer);
 
         havepices++;
 

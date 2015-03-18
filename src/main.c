@@ -12,6 +12,27 @@
 #include "bitfield.h"
 #include "utils.h"
 #include "tortask.h"
+#include "mempool.h"
+
+#define BT_VERSION "-WS0001-"
+char peer_id[PEER_ID_LEN + 1];
+
+static void 
+build_peer_id(void)
+{
+    srand(time(NULL));
+
+    char digits[13];
+    int i;
+    for(i = 0; i < 12; i++) {
+        digits[i] = '0' + rand() % 10;
+    }
+    digits[12] = '\0';
+
+    snprintf(peer_id, sizeof(peer_id), "%s%s", BT_VERSION, digits);
+
+    LOG_DEBUG("our peer id: %s\n", peer_id);
+}
 
 static int
 usage(void)
@@ -20,7 +41,8 @@ usage(void)
     return -1;
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
     if(argc != 2) {
         return usage();
@@ -29,6 +51,13 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
 
     set_log_level(LOG_LEVEL_DEBUG, LOG_TIME_FMT_SHORT);
+
+    build_peer_id();
+
+    if(mempool_init_global()) {
+        LOG_ERROR("mempool init failed!\n");
+        return -1;
+    }
 
     if(utils_set_rlimit_core(0)) {
         LOG_ERROR("setrlimit failed:%s\n", strerror(errno));
@@ -55,7 +84,6 @@ int main(int argc, char *argv[])
 
     if(event_loop(tsk.epfd)) {
         LOG_INFO("event loop quit!\n");
-        return -1;
     }
 
     return 0;

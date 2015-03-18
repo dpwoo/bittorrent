@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-
+#include "mempool.h"
 #include "btype.h"
 #include "event.h"
 #include "fd_hash.h"
@@ -47,7 +47,7 @@ event_add(int epfd, struct event_param *ep)
     }   
 
     struct event_param *eparam;
-    eparam = malloc(sizeof(*eparam));
+    eparam = GMALLOC(sizeof(*eparam));
     if(!eparam) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -55,7 +55,7 @@ event_add(int epfd, struct event_param *ep)
     *eparam = *ep;
 
     if(fd_hash_add(ep->fd, eparam)) {
-        free(eparam);
+        GFREE(eparam);
         return -1;
     }
 
@@ -67,7 +67,7 @@ event_add(int epfd, struct event_param *ep)
     if(epoll_ctl(epfd, EPOLL_CTL_ADD, ep->fd, &evt)) {
         LOG_ERROR("epoll_add failed:%s\n", strerror(errno));
         fd_hash_del(ep->fd);
-        free(eparam);
+        GFREE(eparam);
         return -1;
     }
 
@@ -118,7 +118,7 @@ event_del(int epfd, struct event_param *ep)
 
     fd_hash_del(ep->fd);
 
-    free(eparam);
+    GFREE(eparam);
 
     struct epoll_event evt;
     memset(&evt, 0, sizeof(evt));

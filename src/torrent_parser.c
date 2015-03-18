@@ -4,6 +4,7 @@
 #include <time.h>
 #include "btype.h"
 #include "torrent.h"
+#include "mempool.h"
 #include "log.h"
 
 struct benc_type* 
@@ -38,7 +39,7 @@ handle_string_kv(struct benc_type *bt, const char *str, char **setme, int *setme
 	}
 
 	int slen = val->val.str.len;
-	if((*setme = malloc(slen+1)) == NULL) {
+	if((*setme = GMALLOC(slen+1)) == NULL) {
 		LOG_ERROR("out of memory!\n");
 		return -1;
 	}
@@ -142,7 +143,7 @@ handle_announcelist_kv(struct torrent_file *tor)
             continue;
         }
 
-		if((tor->tracker_url[k] = malloc(slen + 1)) == NULL) {
+		if((tor->tracker_url[k] = GMALLOC(slen + 1)) == NULL) {
 			LOG_ERROR("out of memory!\n");
 			continue;
 		}
@@ -226,9 +227,9 @@ handle_subdir_path(struct benc_type *file, char **subdir)
     }
 
 #if 0
-    char *s, *pathname = malloc(totalsz+1);
+    char *s, *pathname = GMALLOC(totalsz+1);
 #else
-    char *s, *pathname = malloc(totalsz);
+    char *s, *pathname = GMALLOC(totalsz);
 #endif
 
     if(!pathname) {
@@ -300,7 +301,7 @@ handle_info_file_kv(struct benc_type *file, struct single_file *sf)
     }
 
     int slen = path->val.str.len;
-    if(!(sf->pathname = malloc(slen+1))) {
+    if(!(sf->pathname = GMALLOC(slen+1))) {
         LOG_ERROR("out of memory!\n");
         return -1;
     }
@@ -329,7 +330,7 @@ handle_info_files_kv(struct benc_type *bt, struct torrent_file *tor)
         return -1;
     }
 
-    tor->mfile.files = calloc(1, sizeof(struct single_file) * tor->mfile.files_num);
+    tor->mfile.files = GCALLOC(1, sizeof(struct single_file) * tor->mfile.files_num);
     if(!tor->mfile.files_num || !tor->mfile.files) {
         LOG_ERROR("out of memory!\n");
         return -1;
@@ -453,6 +454,7 @@ torrent_info_parser(struct torrent_file *tor)
 
     if(!tor->tracker_num) {
         LOG_ERROR("torrent have no announce list!\n");
+        destroy_dict(&tor->bt);
         return -1;
     }
 
@@ -462,12 +464,15 @@ torrent_info_parser(struct torrent_file *tor)
 
 	if(handle_info_kv(tor)) {
 		LOG_ERROR("handle info key failed!\n");
+        destroy_dict(&tor->bt);
 		return -1;
 	}
 
 #if 0
     dump_torrent_info(tor);
 #endif
+
+    destroy_dict(&tor->bt);
 
 	return 0;
 }
