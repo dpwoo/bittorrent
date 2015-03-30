@@ -127,20 +127,24 @@ enum {
 struct pieces {
     int idx;
     struct pieces *next;
+
+    /* for down stoped list */
+    char *piecebuf;
+    struct slice *base, *wait_list;
 };
 
 struct bitfield {
     char *bitmap;
     int nbyte, npieces;
-    int piecesz;
+    int piecesz, last_piecesz;
     int64 totalsz;
-    struct pieces *pieces_list;
+    struct pieces *down_list;
+    struct pieces *stoped_list;
 };
 
 struct slice {
     int idx, offset;
-    int slicesz, downsz;
-    char *data;
+    int slicesz, downsz, sendsz;
     struct slice *next;
 };
 
@@ -150,26 +154,30 @@ struct peer_rcv_msg {
 
     int data_transfering;
 
-    int nreq_list;
+    int piecelen;
+    char *piecebuf;
+
     struct slice **req_tail;
     struct slice *req_list;
+    struct slice *base, *wait_list;
+};
 
-    struct slice **downed_tail;
-    struct slice *downed_list;
-
-    struct slice *wait_list;
+struct peer_simple_msg {
+    int msgtype;
+    int offset, bufsz;
+    char *buffer, smallbuf[32];
+    struct peer_simple_msg *next;
 };
 
 struct peer_send_msg {
     int pieceidx,piecesz;
     char *piecedata;
-    int sliceoffset;
-    struct slice *req_list; 
-    struct slice **req_tail; 
+    struct slice *req_list;
+    struct slice **req_tail;
+    struct peer_simple_msg *msg_list;
 };
 
 struct tracker;
-struct ip_addrinfo;
 struct peer {
     int isused;
     int state;
@@ -180,6 +188,7 @@ struct peer {
     int am_interested;
     int peer_unchoking;
     int peer_interested;
+    int start_time;
     char strfaddr[32];
     char peerid[PEER_ID_LEN];
     struct peer_rcv_msg pm;
@@ -250,6 +259,7 @@ struct torrent_task {
     uint16 listen_port;
     int task_state;
     int64 down_size;
+    int64 upload_size;
     int leftpieces;
     struct bitfield bf;
     struct torrent_file tor;

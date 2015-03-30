@@ -63,8 +63,8 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
             escape_info_hash,
             peer_id,
             tr->tsk->listen_port,
-            (int64)0,
-            (int64)0,
+            (int64)tr->tsk->upload_size,
+            (int64)tr->tsk->down_size,
             (int64)tr->tsk->leftpieces * tr->tsk->tor.piece_len,
             1
             );
@@ -87,21 +87,10 @@ http_build_uri(struct tracker *tr, char *uribuf, int buflen)
 static int
 http_write_request(int fd, char *reqbuf, int buflen)
 {
-    char *s = reqbuf;
-
-    while(buflen > 0) {
-        int wlen = socket_tcp_send(fd, s, buflen, 0);
-        if(wlen > 0) {
-            buflen -= wlen;
-            s += wlen;
-        } else if(wlen == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            continue;
-        } else {
-            LOG_INFO("write to tracker failed:%s\n", strerror(errno));
-            return -1;
-        }
+    if(socket_tcp_send(fd, reqbuf, buflen, 0) != buflen) {
+        LOG_INFO("write to tracker failed:%s\n", strerror(errno));
+        return -1;
     }
-    
     return 0;
 }
 
@@ -135,36 +124,16 @@ enlarge_response_space(char **dst, int *dstlen)
 static int
 http_read_response(int fd, struct http_rsp_buf *hrb)
 {
-    char *rspbuf = NULL;
-    int mallocsz = 0, rcvtotalsz = 0;
-
-    while(1) {
-
-        if(mallocsz <= rcvtotalsz && enlarge_response_space(&rspbuf, &mallocsz)) {
-                break;
-        }
-
-        int rcvlen = socket_tcp_recv(fd, rspbuf+rcvtotalsz, mallocsz - rcvtotalsz, 0);
-
-        if(rcvlen > 0) {
-            rcvtotalsz += rcvlen;
-        } else if(!rcvlen) {
-            /* peer close */
-            break;
-        } else if(rcvlen < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            break;
-        } else {
-            LOG_INFO("recv tracker failed:%s\n", strerror(errno));
-            break;
-        }
+    int rcvlen = socket_tcp_recv_until_block(fd, &hrb->rcvbuf, &hrb->rcvsz);
+    if(rcvlen <= 0) {
+        LOG_INFO("recv tracker failed:%s\n", strerror(errno));
+        return -1;
     }
 
-    hrb->rcvbuf = rspbuf;
-    hrb->rcvsz = rcvtotalsz;
     hrb->body = NULL;
     hrb->bodysz = 0;
 
-    return rcvtotalsz;
+    return rcvlen;
 }
 
 static int

@@ -5,9 +5,7 @@
 extern "C" {
 #endif
 
-int peer_client_init(struct peer *tr);
-
-int peer_server_init(struct peer *tr);
+int peer_init(struct peer *tr);
 
 int peer_modify_timer_time(struct peer *pr, int time);
 

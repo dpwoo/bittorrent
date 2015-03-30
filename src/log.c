@@ -65,7 +65,8 @@ log_write(const char *file, int line, int level, const char *fmt, ...)
     log_time(timebuf, sizeof(timebuf));
     wlen = snprintf(buffer, sizeof(buffer), "%s[%-12.12s:%04d]",timebuf, log_basename(file), line);
 
-    va_list vl; va_start(vl, fmt);
+    va_list vl;
+    va_start(vl, fmt);
     wlen += vsnprintf(buffer+wlen, sizeof(buffer)-wlen, fmt, vl);
     va_end(vl);
 

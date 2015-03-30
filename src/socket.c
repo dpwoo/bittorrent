@@ -13,15 +13,6 @@
 #include "utils.h"
 
 int
-free_ip_address_info(struct addrinfo *ai)
-{
-    if(ai) {
-        freeaddrinfo(ai);
-    }
-    return 0;
-}
-
-int
 get_ip_address_info(struct tracker_prot *tp, int *ip, uint16 *port)
 {
     struct addrinfo hints;
@@ -49,53 +40,6 @@ get_ip_address_info(struct tracker_prot *tp, int *ip, uint16 *port)
 
 	freeaddrinfo(res);
     return 0; 
-}
-
-int
-create_tracker_client_socket(struct tracker_prot *tp, struct addrinfo *ai)
-{
-    int sfd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if(sfd < 0) {
-        LOG_ERROR("socket error:%s\n", strerror(errno));
-        return -1;
-    }
-
-    if(set_socket_unblock(sfd)) {
-        LOG_ERROR("set socket unblock error:%s\n", strerror(errno));
-        close(sfd);
-        return -1;
-    }
-
-    if(tp->prot_type != TRACKER_PROT_UDP && set_socket_opt(sfd)) {
-        LOG_ERROR("set socket opt error:%s\n", strerror(errno));
-        close(sfd);
-        return -1;
-    }
-
-    return sfd;
-}
-
-int
-connect_tracker_server(int fd, struct tracker_prot *tp, struct addrinfo *ai, int *errNo)
-{
-    while(ai) {
-        if(!connect(fd, ai->ai_addr, ai->ai_addrlen)) {
-            LOG_INFO("connect (%s:%s)...ok\n", tp->host, tp->port);
-            return 0;
-        }
-
-        if(tp->prot_type != TRACKER_PROT_UDP && errno == EINPROGRESS) {
-            *errNo = EINPROGRESS;
-            LOG_INFO("connect (%s:%s)...in progress\n", tp->host, tp->port);
-            return 0;
-        }
-
-        LOG_INFO("connect (%s:%s)...failed:%s\n", tp->host, tp->port, strerror(errno));
-
-        ai = ai->ai_next;
-    }
-
-    return -1;
 }
 
 int
@@ -164,6 +108,12 @@ socket_udp_recv(int sfd, char *buf, int buflen, int flags)
 }
 
 int
+socket_udp_recvfrom(int sfd, char *buf, int buflen, int flags, struct sockaddr *sa, socklen_t  *sl)
+{
+    return recvfrom(sfd, buf, buflen ,flags, sa, sl);
+}
+
+int
 socket_tcp_create(void)
 {
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -204,6 +154,12 @@ int
 socket_udp_connect(int sock, int ip, uint16 port)
 {
     return socket_tcp_connect(sock, ip, port);
+}
+
+int
+socket_udp_bind(int sock, int ip, uint16 port)
+{
+    return socket_tcp_bind(sock, ip, port);
 }
 
 int

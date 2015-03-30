@@ -115,7 +115,6 @@ torrent_listen(struct torrent_task *tsk)
     }
 
     int i, ip = 0;
-
     for(i = 6881; i < 65535; i++) {
         uint16 bport = socket_htons(i);
         if(!socket_tcp_bind(sock, ip, bport)) {
@@ -377,7 +376,7 @@ torrent_peer_init(struct torrent_task *tsk)
             pr->ipaddr = tmp; 
             pr->tsk = tsk;
             pr->isused = 1;
-            peer_server_init(pr);
+            peer_init(pr);
         }
     }
 
@@ -504,6 +503,7 @@ torrent_tracker_announce(struct torrent_task *tsk)
             tracker_udp_announce(tmp);
         }
 
+        /* just take one */
         break;
 	}
 
@@ -595,7 +595,7 @@ torrent_listen_handle(int event, void *evt_ctx)
     pr->ipaddr = ai;
     pr->tsk = tsk;
 
-    peer_client_init(pr);
+    peer_init(pr);
 
     return 0;
 }
@@ -603,15 +603,6 @@ torrent_listen_handle(int event, void *evt_ctx)
 static int
 torrent_timeout_handle(int event, void *evt_ctx)
 {
-#if 0
-    static int lasttime = 0;
-
-    if(time(NULL) - lasttime >= 60*10) {
-        MEM_DUMP(NULL);
-        lasttime = time(NULL);
-    }
-#endif
-
 	struct torrent_task *tsk;
 	tsk = (struct torrent_task *)evt_ctx;
 

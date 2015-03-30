@@ -9,15 +9,9 @@ extern "C" {
 
 struct addrinfo;
 
-int free_ip_address_info(struct addrinfo *ai);
 int get_ip_address_info(struct tracker_prot *tp, int *ip, uint16 *port);
 
-int create_tracker_client_socket(struct tracker_prot *tp, struct addrinfo *ai);
-int connect_tracker_server(int fd, struct tracker_prot *tp,
-                            struct addrinfo *ai, int *errNo);
-
 int set_socket_unblock(int fd);
-
 int set_socket_opt(int fd);
 int get_socket_opt(int sfd, int opname, int *flags);
 int get_socket_error(int sfd, int *error);
@@ -40,8 +34,14 @@ int socket_tcp_accept(int sock, int *ip, uint16 *port);
 
 int socket_udp_create(void);
 int socket_udp_connect(int sock, int ip, unsigned short port);
+int socket_udp_bind(int sock, int ip, uint16 port);
 int socket_udp_send(int sfd, char *buf, int buflen, int flags);
 int socket_udp_recv(int sfd, char *buf, int buflen, int flags);
+
+struct sockaddr;
+struct socklen_t;
+int socket_udp_recvfrom(int sfd, char *buf, int buflen, int flags,
+                                struct sockaddr *sa, socklen_t  *sl);
 
 uint64 socket_hton64(uint64 host);
 uint64 socket_ntoh64(uint64 net);

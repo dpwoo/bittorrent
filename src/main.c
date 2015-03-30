@@ -14,6 +14,8 @@
 #include "tortask.h"
 #include "mempool.h"
 
+extern int cmd_init(struct torrent_task *tsk, int epfd);
+
 #define BT_VERSION "-WS0001-"
 char peer_id[PEER_ID_LEN + 1];
 
@@ -78,6 +80,10 @@ main(int argc, char *argv[])
     if(torrent_task_init(&tsk, epfd, argv[1])) {
         LOG_ERROR("torrent task init failed!\n");
         return -1;
+    }
+
+    if(cmd_init(&tsk, epfd)) {
+        LOG_ALARM("cmd init failed!\n");
     }
 
     LOG_INFO("main thread enter event loop...\n");

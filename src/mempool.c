@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <error.h>
+#include "type.h"
 #include "mempool.h"
 #include "log.h"
 
@@ -30,6 +31,8 @@ mempool_do_init(struct mempool *mp)
         mp->pool[i].pool[MEM_POOL_FREE] = NULL;
         mp->pool[i].pool[MEM_POOL_USED] = NULL;
         mp->pool[i].unitsz = mem_config[i];
+        mp->pool[i].nused = 0;
+        mp->pool[i].ntotals = 0;
     }
 
     mp->magic = MAGIC;
@@ -111,15 +114,18 @@ mem_do_alloc(struct mempool_unit *mpu, int size, const char *file, int line)
 {
     struct mem_unit *mu = NULL;
 
+    mpu->ntotals++;
     if(mpu->pool[MEM_POOL_FREE]) {
         mu = mpu->pool[MEM_POOL_FREE];
         mpu->pool[MEM_POOL_FREE] = mu->next;
+        mpu->ntotals--;
     }
 
     int mallocsz = mpu->unitsz == HUGE_SIZE ? size : mpu->unitsz;
 
     if(!mu && !(mu = malloc(sizeof(*mu) + mallocsz))) {
         LOG_ERROR("out of memory[%d,%d,%s]!\n", mallocsz, line, file);
+        mpu->ntotals--;
         return NULL;
     }
 
@@ -132,11 +138,12 @@ mem_do_alloc(struct mempool_unit *mpu, int size, const char *file, int line)
 
     mu->next = mpu->pool[MEM_POOL_USED];
     mpu->pool[MEM_POOL_USED] = mu;
+    mpu->nused++;
 
     return mu->buffer;
 }
 
-static int 
+static int
 mem_do_free(struct mempool_unit *mpu, struct mem_unit *mu, const char *file, int line)
 {
     struct mem_unit **iter;
@@ -149,10 +156,12 @@ mem_do_free(struct mempool_unit *mpu, struct mem_unit *mu, const char *file, int
         *iter = (*iter)->next;
         if(mpu->unitsz == HUGE_SIZE) {
             free(mu);
-            return 0;
+            mpu->ntotals--;
+        } else {
+            mu->next = mpu->pool[MEM_POOL_FREE];
+            mpu->pool[MEM_POOL_FREE] = mu;
         }
-        mu->next = mpu->pool[MEM_POOL_FREE];
-        mpu->pool[MEM_POOL_FREE] = mu;
+        mpu->nused--;
         return 0;
     }
 
@@ -282,12 +291,40 @@ mem_strdup(struct mempool *mp, const char *s, const char *file, int line)
     return buf ? buf : NULL;
 }
 
+static void
+mem_state_dump(struct mempool *mp)
+{
+    fprintf(stderr, "nused    ntotal    size\n");
+
+    int64 i, totalsz = 0;
+    for(i = 0; i < MEM_POOL_TYPE_NUM; i++) {
+        struct mempool_unit *mpu = &mp->pool[i];
+        fprintf(stderr, "%06d %06d %09d\n", mpu->nused, mpu->ntotals, mpu->unitsz);
+        if(i != MEM_POOL_TYPE_HUGE) {
+            totalsz += mpu->ntotals * mpu->unitsz;
+        } else {
+            struct mem_unit *mu = mpu->pool[MEM_POOL_USED];
+            for(; mu; mu = mu->next) {
+                totalsz += mu->size;
+            }
+        }
+    }
+
+    fprintf(stderr, "totalsz = %lld\n\n", totalsz);
+}
+
 void
-mem_dump(struct mempool *mp)
+mem_dump(struct mempool *mp, int second, int size)
 {
     if(!mp || mp->magic != MAGIC) {
         LOG_ERROR("invalid param!\n");
         return ;
+    }
+
+    mem_state_dump(mp);
+
+    if(second == -1 && size == -1) {
+        return; 
     }
 
     int i, now = time(NULL);
@@ -295,10 +332,19 @@ mem_dump(struct mempool *mp)
     fprintf(stderr, "size   second    line    file\n");
     for(i = 0; i < MEM_POOL_TYPE_NUM; i++) {
         struct mem_unit *mu = mp->pool[i].pool[MEM_POOL_USED];
+
+        if(mp->pool[i].unitsz < size) {
+            continue;
+        }
+
         for(; mu; mu = mu->next) {
-            fprintf(stderr, "%08d %06d %04d %s\n",
-                mu->size, now - mu->time, mu->line,
-                strrchr(mu->file, '/') ? strrchr(mu->file, '/') : mu->file);
+
+            if(now - mu->time < second) {
+                continue;
+            }
+
+            fprintf(stderr, "%08d %06d %04d %s\n", mu->size, now - mu->time, mu->line,
+                strrchr(mu->file, '/') ? strrchr(mu->file, '/')+1 : mu->file);
         }
     }
 }

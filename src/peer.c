@@ -26,8 +26,9 @@ static int peer_reset_member(struct peer *pr);
 
 static int peer_socket_init(struct peer *pr);
 
-static int peer_check_piece_sha1(struct peer *pr);
+static int peer_check_piece_sha1(struct peer *pr, int idx);
 static int peer_down_complete_slice(struct peer *pr);
+static int peer_check_download_slice(struct peer *pr, int idx, int offset, int slicesz);
 
 static int peer_start(struct peer *pr);
 static int peer_connecting_timeout(struct peer *pr);
@@ -63,6 +64,7 @@ static int peer_send_notintrested_msg(struct peer *pr);
 static int peer_send_have_msg(struct peer *pr);
 static int peer_send_request_msg(struct peer *pr, struct peer_rcv_msg *pm);
 static int peer_send_cancel_msg(struct peer *pr, int idx, int offset, int sz);
+static int peer_send_normal_msg(struct peer *pr);
 
 static int peer_recv_choked_msg(struct peer *pr);
 static int peer_recv_unchoked_msg(struct peer *pr);
@@ -89,9 +91,20 @@ peer_reset_member(struct peer *pr)
     peer_destroy_timer(pr);
     peer_del_event(pr);
 
-/* bitmap */
+    /* bitmap */
     GFREE(pr->bf.bitmap);
     pr->bf.bitmap = NULL;
+
+    /* peer bitmap piece list */
+    if(pr->bf.down_list) {
+        struct pieces *p;
+        while(pr->bf.down_list) {
+            p = pr->bf.down_list;
+            pr->bf.down_list = p->next;
+            GFREE(p);
+        }
+        pr->bf.down_list = NULL;
+    }
 
     pr->pm.data_transfering = 0;
     pr->pm.rcvlen = 0;
@@ -100,6 +113,7 @@ peer_reset_member(struct peer *pr)
         pr->pm.rcvbuf = NULL;
     }
 
+    /* notify list */
     if(pr->having_pieces) {
         struct pieces *p;
         while(pr->having_pieces) {
@@ -110,39 +124,39 @@ peer_reset_member(struct peer *pr)
         pr->having_pieces = NULL;
     }
 
-/* data downloading list */
-    if(pr->pm.req_list || pr->pm.downed_list || pr->pm.wait_list) {
-        *pr->pm.req_tail = pr->pm.wait_list;
-        *pr->pm.downed_tail = pr->pm.req_list;
-        pr->pm.wait_list = pr->pm.downed_list;
-
-        struct slice *tmp = pr->pm.wait_list;
-        while(tmp) {
-            GFREE(tmp->data);
-            tmp->data = NULL;
-            tmp = tmp->next;
+#if 1
+    /* data downloading list */
+    if(pr->pm.req_list || pr->pm.wait_list) {
+        if(pr->pm.req_list) {
+            pr->pm.req_list->downsz = 0;
+            *pr->pm.req_tail = pr->pm.wait_list;
+            pr->pm.wait_list = pr->pm.req_list;
         }
 
         int idx = pr->pm.wait_list->idx;
-
-        if(pr->pm.wait_list->offset == 0) {
-            GFREE(pr->pm.wait_list);
-        } else {
-            LOG_ERROR("peer[%s] not complete slice, maybe memory leak!\n");
-        }
-
-        pr->pm.wait_list = NULL;
-
-        pr->pm.downed_list = NULL;
-        pr->pm.downed_tail = &pr->pm.downed_list;
-
-        pr->pm.req_list = NULL;
-        pr->pm.req_tail = &pr->pm.req_list;
-
         bitfield_peer_giveup_piece(&pr->tsk->bf, idx);
-    }
 
-/* data uploading list */
+        if(pr->pm.wait_list->offset >= 32*1024) {
+            bitfield_add_piece_to_stoped_list(&pr->tsk->bf,
+                        idx, pr->pm.piecebuf, pr->pm.base, pr->pm.wait_list);
+            pr->pm.piecebuf = NULL;
+            pr->pm.base = NULL;
+        }
+    }
+#endif
+
+    GFREE(pr->pm.base);
+    pr->pm.base = NULL;
+    pr->pm.wait_list = NULL;
+
+    pr->pm.req_list = NULL;
+    pr->pm.req_tail = &pr->pm.req_list;
+
+    GFREE(pr->pm.piecebuf);
+    pr->pm.piecebuf = NULL;
+    pr->pm.piecelen = 0;
+
+    /* data uploading list */
     GFREE(pr->psm.piecedata);
     pr->psm.piecedata = NULL;
 
@@ -157,6 +171,15 @@ peer_reset_member(struct peer *pr)
 
     pr->psm.req_list = NULL;
     pr->psm.req_tail = &pr->psm.req_list;
+
+    /* normal peer msg list */
+    struct peer_simple_msg *msg;
+    while(pr->psm.msg_list) {
+        msg = pr->psm.msg_list;
+        pr->psm.msg_list = msg->next;
+        GFREE(msg);
+    }
+    pr->psm.msg_list = NULL;
 
     return 0;
 }
@@ -194,76 +217,58 @@ peer_down_complete_slice(struct peer *pr)
 {
     struct peer_rcv_msg *pm = &pr->pm;
 
-    struct slice *tmp = pm->req_list;
+    /* remove complete slice */
+    int idx = pm->req_list->idx;
     pm->req_list = pm->req_list->next; 
     if(!pm->req_list) {
         pm->req_tail = &pm->req_list;
     }
 
-    *pm->downed_tail = tmp;
-    tmp->next = NULL;
-    pm->downed_tail = &tmp->next;
-
     if(!pm->wait_list && !pm->req_list) {
-        if(!pm->downed_list || pm->downed_list->offset != 0) {
-            LOG_ERROR("peer[%s] download error occur, and memory may leak!\n", pr->strfaddr);
-            return -1;
-        }
-        peer_check_piece_sha1(pr);
-        GFREE(pm->downed_list);
-        pm->downed_list = NULL;
-        pm->downed_tail = &pm->downed_list;
+        peer_check_piece_sha1(pr, idx);
+        GFREE(pm->base);
+        pm->base = NULL;
     }
 
     return 0;
 }
 
 static int
-peer_check_piece_sha1(struct peer *pr)
+peer_check_piece_sha1(struct peer *pr, int idx)
 {
     struct peer_rcv_msg *pm = &pr->pm;
 
-    char *buffer = GMALLOC(pr->bf.piecesz);
-    if(!buffer) {
-        LOG_ERROR("out of memory!\n");
-        return -1;
-    }
+    char *buffer = pm->piecebuf; 
+    int bufsz = pm->piecelen;
 
-    int offset = 0;
-    int idx = pm->downed_list->idx;
-
-    struct slice *sl = pm->downed_list;
-    for(; sl; sl = sl->next) {
-        memcpy(buffer + offset, sl->data, sl->slicesz);
-        offset += sl->slicesz;
-        GFREE(sl->data);
-    }
-
-    if(utils_sha1_check(buffer, offset, &pr->tsk->tor.pieces[idx * 20], 20)) {
-        LOG_ERROR("peer[%s] piece[%d] sha1 check failed!\n", pr->strfaddr, idx);
+    if(utils_sha1_check(buffer, bufsz, &pr->tsk->tor.pieces[idx * 20], 20)) {
+        LOG_ERROR("peer[%s] piece[%d,%d] sha1 check failed!\n", pr->strfaddr, idx, bufsz);
         bitfield_peer_giveup_piece(&pr->tsk->bf, idx);
-        GFREE(buffer);
-        return -1;
+        goto FAILED;
     }
 
-    if(torrent_write_piece(pr->tsk, idx, buffer, offset)) {
+    if(torrent_write_piece(pr->tsk, idx, buffer, bufsz)) {
         LOG_ERROR("peer[%s] write piece[%d]failed!\n", pr->strfaddr, idx);
-        GFREE(buffer);
-        return -1;
+        goto FAILED;
     }
 
     if(bitfield_local_have(&pr->tsk->bf, idx)) {
-        GFREE(buffer);
-        return -1;
+        goto FAILED;
     }
 
     torrent_add_having_piece(pr->tsk, idx);
 
+    pr->tsk->down_size += pr->tsk->bf.piecesz;
     pr->tsk->leftpieces--;
     LOG_DEBUG("peer[%s] piece[%d] complete!\n", pr->strfaddr, idx);
 
-    GFREE(buffer);
     return 0;
+
+FAILED:
+    GFREE(buffer);
+    pm->piecebuf = NULL;
+    pm->piecelen = 0;
+    return -1;
 }
 
 static int
@@ -319,8 +324,6 @@ peer_start(struct peer *pr)
 {
     if(!pr->ipaddr->client && peer_socket_init(pr)) {
         LOG_ERROR("peer[%s] socket init failed.\n", pr->strfaddr);
-        peer_destroy_timer(pr);
-        pr->isused = 0;
         return -1;
     }
 
@@ -362,12 +365,10 @@ peer_start(struct peer *pr)
     }
 
 FAILED:
-    peer_destroy_timer(pr);
     if(pr->sockid > 0) {
         close(pr->sockid);
         pr->sockid = -1;
     }
-    pr->isused = 0;
     return -1;
 }
 
@@ -379,7 +380,10 @@ peer_timeout_handle(int event, void *evt_ctx)
 
     long long tmrbuf;
     if(read(pr->tmrfd, &tmrbuf, sizeof(tmrbuf)) != sizeof(tmrbuf)) {
-        LOG_ALARM("timer read tmrbuf failed:%s\n", strerror(errno));
+        LOG_ALARM("peer[%s] timer read failed:%s\n", pr->strfaddr, strerror(errno));
+        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
     }
 
     peer_stop_timer(pr);
@@ -595,6 +599,11 @@ peer_del_event(struct peer *pr)
         return -1;
     }
 
+    /* we should recv all the data when close sock, or a reset will send to peer */
+    char buffer[1024];
+    while(socket_tcp_recv(pr->sockid, buffer, sizeof(buffer), 0) > 0) {
+    }
+
     close(pr->sockid);
     pr->sockid = -1;
 
@@ -727,7 +736,7 @@ peer_send_slice_header(struct peer *pr, struct slice *sl)
     memcpy(msg+9, &offset, 4);
 
     if(peer_send_data(pr, msg, sizeof(msg))) {
-        LOG_DEBUG("peer[%s] send piece msg hdr failed\n", pr->strfaddr);
+        LOG_ERROR("peer[%s] send piece msg hdr failed\n", pr->strfaddr);
         return -1;
     }
 
@@ -761,15 +770,14 @@ peer_send_slice_data(struct peer *pr)
         return -1;
     }
 
-    if(!pr->psm.sliceoffset && peer_send_slice_header(pr, sl)) {
+    if(!sl->sendsz && peer_send_slice_header(pr, sl)) {
         return -1;
     }
 
-    int offset = sl->offset+pr->psm.sliceoffset;
-    int size = sl->slicesz < MTU_SZ ? sl->slicesz : MTU_SZ; 
-
-    sl->slicesz -= size;
-    pr->psm.sliceoffset += size;
+    int leftsz = sl->slicesz - sl->sendsz;
+    int offset = sl->offset+sl->sendsz;
+    int size = leftsz < MTU_SZ ? leftsz : MTU_SZ; 
+    sl->sendsz += size;
 
     if(peer_send_data(pr, pr->psm.piecedata+offset, size)) {
         LOG_DEBUG("peer[%s] send data[%d,%d,%d] failed\n",
@@ -781,16 +789,46 @@ peer_send_slice_data(struct peer *pr)
     LOG_DEBUG("peer[%s] send data[%d,%d,%d]\n", pr->strfaddr, sl->idx, offset, size);
 #endif
 
-    if(sl->slicesz > 0) {
+    if(sl->sendsz < sl->slicesz) {
         return 0;
     }
 
-    pr->psm.sliceoffset = 0;
     pr->psm.req_list = sl->next;
     if(!pr->psm.req_list) {
         pr->psm.req_tail = &pr->psm.req_list;
     }
     GFREE(sl);
+
+    pr->tsk->upload_size += SLICE_SZ;
+
+    return 0;
+}
+
+static int
+peer_add_send_msg_list(struct peer *pr, int msgtype, char *buffer, int bufsz)
+{
+    struct peer_simple_msg *smsg;
+    if(!(smsg = GCALLOC(1, sizeof(*smsg)))) {
+        LOG_ERROR("out of memory!\n");
+        return -1;
+    }
+
+    smsg->msgtype = msgtype;
+    smsg->bufsz = bufsz;
+
+    smsg->buffer = buffer;
+    if(bufsz <= 32) { /* normal bt msg */
+        smsg->buffer = smsg->smallbuf;
+        memcpy(smsg->buffer, buffer, bufsz);
+    }
+
+    smsg->next = pr->psm.msg_list;
+    pr->psm.msg_list = smsg;
+
+    if(peer_mod_event(pr, EPOLLIN | EPOLLOUT)) {
+        LOG_ERROR("peer[%s] modify event failed\n", pr->strfaddr);
+        return -1;
+    }
 
     return 0;
 }
@@ -803,10 +841,8 @@ peer_send_chocked_msg(struct peer *pr)
     pr->am_unchoking = 0;
 
     char msg[5] = {0, 0, 0, 1, PEER_MSG_ID_CHOCKED};
-    if(peer_send_data(pr, msg, sizeof(msg))) {
-        return -1;
-    }
-    return 0;
+
+    return peer_add_send_msg_list(pr, PEER_MSG_ID_CHOCKED, msg, sizeof(msg));
 }
 
 static int
@@ -815,10 +851,8 @@ peer_send_unchocked_msg(struct peer *pr)
     LOG_INFO("peer[%s] send unchocked msg\n", pr->strfaddr);
 
     char msg[5] = {0, 0, 0, 1, PEER_MSG_ID_UNCHOCKED};
-    if(peer_send_data(pr, msg, sizeof(msg))) {
-        return -1;
-    }
-    return 0;
+
+    return peer_add_send_msg_list(pr, PEER_MSG_ID_UNCHOCKED, msg, sizeof(msg));
 }
 
 static int
@@ -826,12 +860,10 @@ peer_send_intrested_msg(struct peer *pr)
 {
     LOG_INFO("peer[%s] send intrested msg\n", pr->strfaddr);
 
-    char msg[5] = {0, 0, 0, 1, PEER_MSG_ID_INSTRESTED};
-    if(peer_send_data(pr, msg, sizeof(msg))) {
-        return -1;
-    }
     pr->am_interested = 1;
-    return 0;
+    char msg[5] = {0, 0, 0, 1, PEER_MSG_ID_INSTRESTED};
+
+    return peer_add_send_msg_list(pr, PEER_MSG_ID_INSTRESTED, msg, sizeof(msg));
 }
 
 static int
@@ -839,11 +871,10 @@ peer_send_notintrested_msg(struct peer *pr)
 {
     LOG_INFO("peer[%s] send notintrested msg\n", pr->strfaddr);
 
+    pr->am_interested = 0;
     char msg[5] = {0, 0, 0, 1, PEER_MSG_ID_NOTINSTRESTED};
-    if(peer_send_data(pr, msg, sizeof(msg))) {
-        return -1;
-    }
-    return 0;
+
+    return peer_add_send_msg_list(pr, PEER_MSG_ID_NOTINSTRESTED, msg, sizeof(msg));
 }
 
 static int
@@ -859,9 +890,8 @@ peer_send_have_msg(struct peer *pr)
         int idx = socket_htonl((*p)->idx);
         memcpy(msg+5, &idx, 4);
 
-        if(peer_send_data(pr, msg, sizeof(msg))) {
-            return -1;
-        }
+        peer_add_send_msg_list(pr, PEER_MSG_ID_HAVE, msg, sizeof(msg));
+
         tmp = *p;
         *p = tmp->next;
         GFREE(tmp);
@@ -903,8 +933,8 @@ peer_send_request_msg(struct peer *pr, struct peer_rcv_msg *pm)
         int sz = socket_htonl((*sl)->slicesz);
         memcpy(msg+13, &sz, 4);
 
-        if(peer_send_data(pr, msg, sizeof(msg))) {
-            LOG_ERROR("peer[%s] send request msg[%d,%d,%d] failed\n",
+        if(peer_add_send_msg_list(pr, PEER_MSG_ID_REQUEST, msg, sizeof(msg))) {
+            LOG_ERROR("peer[%s] add request msg[%d,%d,%d] failed\n",
                   pr->strfaddr, (*sl)->idx, (*sl)->offset, (*sl)->slicesz);
             return -1;
         }
@@ -934,7 +964,7 @@ peer_send_cancel_msg(struct peer *pr, int idx, int offset, int sz)
     sz = socket_htonl(sz);
     memcpy(msg+13, &sz, 4);
 
-    if(peer_send_data(pr, msg, sizeof(msg))) {
+    if(peer_add_send_msg_list(pr, PEER_MSG_ID_CANCEL, msg, sizeof(msg))) {
         return -1;
     }
 
@@ -944,11 +974,10 @@ peer_send_cancel_msg(struct peer *pr, int idx, int offset, int sz)
 static int
 peer_send_keepalive_msg(struct peer *pr)
 {
-    char buf[4];
-    memset(buf, 0, sizeof(buf));
+    char msg[4];
+    memset(msg, 0, sizeof(msg));
 
-    if(peer_send_data(pr, buf, sizeof(buf))) {
-        LOG_ERROR("peer[%s] send keepalive failed:%s\n",pr->strfaddr, strerror(errno));
+    if(peer_add_send_msg_list(pr, PEER_MSG_ID_KEEPALIVE, msg, sizeof(msg))) {
         return -1;
     }
 
@@ -1107,16 +1136,11 @@ peer_recv_choked_msg(struct peer *pr)
 
     struct peer_rcv_msg *pm = &pr->pm;
     if(pm->req_list) {
+        pm->req_list->downsz = 0;
         *pm->req_tail = pm->wait_list;
         pm->wait_list = pm->req_list;
         pm->req_list = NULL;
         pm->req_tail = &pm->req_list;
-        struct slice *tmp = pm->wait_list;
-        while(tmp) {
-            GFREE(tmp->data);
-            tmp->data = NULL;
-            tmp = tmp->next;
-        }
     }
 
     pm->rcvlen -= 5;
@@ -1245,11 +1269,14 @@ peer_recv_request_msg(struct peer *pr)
         peer_send_chocked_msg(pr);
         return 0;
     }
+    
+    if(offset < 0 || offset >= pr->tsk->bf.piecesz || size > SLICE_SZ) {
+        return -1;
+    }
 
-    if(bitfield_is_local_have(&pr->tsk->bf, idx, offset, size)) {
+    if(bitfield_is_local_have(&pr->tsk->bf, idx)) {
         LOG_INFO("peer[%s] request error[%d,%d,%d]!\n", pr->strfaddr, idx, offset, size);
-        peer_send_chocked_msg(pr);
-        return 0;
+        return -1;
     }
 
     if(!pr->psm.req_list) {
@@ -1298,8 +1325,6 @@ peer_recv_cancel_msg(struct peer *pr)
 
     LOG_INFO("peer[%s] recv cancel msg[%d,%d,%d]!\n", pr->strfaddr, idx, offset, size);
 
-return 0;
-
     struct slice **sl;
     for(sl = &pr->psm.req_list; *sl; sl = &(*sl)->next) {
         if((*sl)->idx == idx && (*sl)->offset == offset) {
@@ -1308,14 +1333,9 @@ return 0;
     }
 
     if(*sl) {
-        if(*sl == pr->psm.req_list) {
-            pr->psm.sliceoffset = 0;
-        }
-
         struct slice *tmp = *sl;
         *sl = (*sl)->next;
-        free(tmp);
-
+        GFREE(tmp);
         if(!pr->psm.req_list) {
             pr->psm.req_tail = &pr->psm.req_list;
         }
@@ -1344,19 +1364,19 @@ static int
 peer_recv_left_piece_msg(struct peer *pr)
 {
     struct peer_rcv_msg *pm = &pr->pm;
-    if(!pm->req_list || !pm->req_list->data) {
+    if(!pm->req_list || !pm->piecebuf) {
         LOG_ERROR("peer[%s] download error!\n", pr->strfaddr);
         return -1;
     }
 
     int totalsz = pm->req_list->downsz + pm->rcvlen;
+    int offset = pm->req_list->offset + pm->req_list->downsz;
 
     pr->ipaddr->downsz += pm->rcvlen;
 
     if(totalsz >= pm->req_list->slicesz) {
         int len = totalsz - pm->req_list->slicesz;
-
-        memcpy(pm->req_list->data + pm->req_list->downsz, pm->rcvbuf, pm->rcvlen - len);
+        memcpy(pm->piecebuf+offset, pm->rcvbuf, pm->rcvlen - len);
 
         if(len) {
             memmove(pr->pm.rcvbuf, pr->pm.rcvbuf+pr->pm.rcvlen-len, len);
@@ -1375,14 +1395,45 @@ peer_recv_left_piece_msg(struct peer *pr)
             return -1;
         }
 
-        if(peer_send_request_msg(pr, pm)) {
-            return -1;
-        }
+        peer_send_request_msg(pr, pm);
 
     } else {
-        memcpy(pm->req_list->data + pm->req_list->downsz, pm->rcvbuf, pm->rcvlen);
+        memcpy(pm->piecebuf+offset, pm->rcvbuf, pm->rcvlen);
         pm->req_list->downsz += pm->rcvlen;
         pr->pm.rcvlen = 0;
+    }
+
+    return 0;
+}
+
+static int
+peer_check_download_slice(struct peer *pr, int idx, int offset, int slicesz)
+{
+    struct peer_rcv_msg *pm = &pr->pm;
+
+    struct slice *tmp = NULL, **iter;
+    for(iter = &pm->req_list; *iter; iter = &(*iter)->next) {
+        tmp = *iter;
+        if(tmp->idx == idx && tmp->offset == offset && tmp->slicesz == slicesz) {
+            break;
+        }
+    }
+
+    if(!(*iter)) {
+        LOG_ERROR("peer[%s] recv not correct piece msg[%d,%d]!\n", pr->strfaddr, idx, offset);
+        return -1;
+    }
+
+    /* sometime uploader not sending resopnse slice by order as we request */
+    if(*iter != pm->req_list) {
+        *iter = tmp->next;
+        tmp->next = pm->req_list;
+        pm->req_list = tmp;
+
+        for(iter = &pm->req_list; *iter; iter = &(*iter)->next) {
+            /* nothing */
+        }
+        pm->req_tail = iter;
     }
 
     return 0;
@@ -1409,40 +1460,32 @@ peer_recv_piece_msg(struct peer *pr)
     memcpy(&len_pre, pm->rcvbuf, 4);
     len_pre = socket_ntohl(len_pre);
 
-    if(pm->req_list == NULL) {
-        LOG_ERROR("peer[%s] download error[%d,%d,%d]!\n", pr->strfaddr, idx, offset, datasz);
-        return -1;
-    }
-
-    if(len_pre - 9 != pm->req_list->slicesz
-                   || pm->req_list->offset != offset || pm->req_list->idx != idx) {
-        LOG_ERROR("peer[%s] recv not correct piece msg[%d,%d]!\n", pr->strfaddr, idx, offset);
+    if(peer_check_download_slice(pr, idx, offset, len_pre-9)) {
         return -1;
     }
 
     pr->ipaddr->downsz += datasz;
 
-    pm->req_list->data = GMALLOC(pm->req_list->slicesz);
-    if(!pm->req_list->data) {
-        LOG_ERROR("out of memory[%d]\n", pm->req_list->slicesz);
+    if(!pm->piecebuf && !(pm->piecebuf = GMALLOC(pr->tsk->bf.piecesz))) {
+        LOG_ERROR("out of memory[%d]\n", pr->tsk->bf.piecesz);
         return -1;
     }
 
+    pm->piecelen = idx == pr->tsk->bf.npieces-1 ?
+                   pr->tsk->bf.last_piecesz : pr->tsk->bf.piecesz;
+
     if(datasz < pm->req_list->slicesz) { /* part of slice */
-        memcpy(pm->req_list->data, data, datasz);
+        memcpy(pm->piecebuf+pm->req_list->offset, data, datasz);
         pm->req_list->downsz = datasz;
         pm->data_transfering = 1;
         pm->rcvlen = 0;
     } else { /* a small slice data */
-        memcpy(pm->req_list->data, data, pm->req_list->slicesz);
-
+        memcpy(pm->piecebuf+pm->req_list->offset, data, pm->req_list->slicesz);
         pm->rcvlen = datasz - pm->req_list->slicesz;
         if(pm->rcvlen) {
             memmove(pm->rcvbuf, pm->rcvbuf+13+pm->req_list->slicesz, pm->rcvlen);     
         }
-
         peer_down_complete_slice(pr);
-
         peer_send_request_msg(pr, pm);
     }
 
@@ -1577,8 +1620,33 @@ peer_event_connected_recv(struct peer *pr)
 }
 
 static int
+peer_send_normal_msg(struct peer *pr)
+{
+    struct peer_simple_msg *msg, **iter = &pr->psm.msg_list;
+    while(*iter) {
+        msg = *iter; 
+        if(socket_tcp_send(pr->sockid, msg->buffer, msg->bufsz, 0) != msg->bufsz) {
+            LOG_ERROR("peer[%s] send failed:%s\n", pr->strfaddr, strerror(errno));
+            return -1;
+        }
+        *iter = msg->next;
+        GFREE(msg);
+    }
+
+    return 0;
+}
+
+static int
 peer_event_connected_send(struct peer *pr)
 {
+    /* normal bt msg */
+    if(!pr->psm.req_list || !pr->psm.req_list->sendsz) {
+        if(peer_send_normal_msg(pr)) {
+            return -1;
+        }
+    }
+
+    /* piece data msg */
     if(peer_send_slice_data(pr)) {
         return -1;
     }
@@ -1586,6 +1654,7 @@ peer_event_connected_send(struct peer *pr)
     if(!pr->psm.req_list) {
         peer_mod_event(pr, EPOLLIN);
     }
+
     return 0;
 }
 
@@ -1635,43 +1704,38 @@ peer_event_handle(int event, void *evt_ctx)
     return -1;
 }
 
-static int
+int
 peer_init(struct peer *pr)
 {
-    pr->heartbeat = time(NULL);
+    pr->state = PEER_STATE_NONE;
+    if(pr->ipaddr->client) { /* peer connect to us */
+        pr->state = PEER_STATE_SEND_HANDSHAKE;
+    }
+
+    pr->start_time = time(NULL);
+    pr->heartbeat = pr->start_time;
     pr->am_unchoking = 1;
     pr->peer_unchoking =  1;
     pr->having_pieces = NULL;
 
-    pr->psm.sliceoffset = 0;
     pr->psm.piecedata = NULL;
     pr->psm.piecesz = 0;
     pr->psm.req_list = NULL;
     pr->psm.req_tail = &pr->psm.req_list;
 
+    pr->pm.piecebuf = NULL;
     pr->pm.data_transfering = 0;
     pr->pm.rcvlen = 0;
 
     pr->pm.rcvbuf = GMALLOC(MAX_BUFFER_LEN);
     if(!pr->pm.rcvbuf) {
         LOG_ERROR("out of memory!\n");
-        return -1;
+        goto FAILED;
     }
 
     utils_strf_addrinfo(pr->ipaddr->ip, pr->ipaddr->port, pr->strfaddr, 32);
 
     if(peer_create_timer(pr)) {
-        return -1;
-    }
-
-    return 0;
-}
-
-int
-peer_client_init(struct peer *pr)
-{
-    pr->state = PEER_STATE_SEND_HANDSHAKE;
-    if(peer_init(pr)) {
         goto FAILED;
     }
 
@@ -1680,27 +1744,7 @@ peer_client_init(struct peer *pr)
     }
 
     return 0;
-FAILED:
-    GFREE(pr->pm.rcvbuf);
-    pr->pm.rcvbuf = NULL;
-    peer_destroy_timer(pr);
-    torrent_peer_recycle(pr->tsk, pr, PEER_TYPE_ACTIVE_NONE);
-    return -1;
-}
 
-int
-peer_server_init(struct peer *pr)
-{
-    pr->state = PEER_STATE_NONE;
-    if(peer_init(pr)) {
-        goto FAILED;
-    }
-
-    if(peer_start(pr)) {
-        goto FAILED;
-    }
-
-    return 0;
 FAILED:
     GFREE(pr->pm.rcvbuf);
     pr->pm.rcvbuf = NULL;

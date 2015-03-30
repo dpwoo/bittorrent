@@ -150,7 +150,7 @@ event_dispatch(int epfd, int event, int fd)
     struct event_param *ep;
 
     ep = fd_hash_find(fd);
-    if(!ep) {
+    if(!ep || !ep->evt_hdl) {
         LOG_ERROR("dispatch: no found fd:%d in fd hash!\n", fd);
         epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
         return -1;
@@ -160,9 +160,7 @@ event_dispatch(int epfd, int event, int fd)
     dump_event(event);
 #endif
 
-    if(ep->evt_hdl) {
-        (*ep->evt_hdl)(event, ep->evt_ctx);
-    }
+    (*ep->evt_hdl)(event, ep->evt_ctx);
 
     return 0;
 }

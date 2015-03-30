@@ -39,7 +39,7 @@ struct mem_unit {
 };
 
 struct mempool_unit {
-    int unitsz;
+    int unitsz, nused, ntotals;
     struct mem_unit *pool[MEM_POOL_NUM];
 };
 
@@ -47,7 +47,6 @@ struct mempool {
     int magic;
     struct mempool_unit pool[MEM_POOL_TYPE_NUM];
 };
-
 
 extern struct mempool global_mpool;
 
@@ -65,7 +64,7 @@ void *mem_realloc(struct mempool *mp, void *addr, int size, const char *file, in
 
 int mem_free(struct mempool *mp, void *addr, const char *file, int line);
 
-void mem_dump(struct mempool *mp);
+void mem_dump(struct mempool *mp, int time, int size);
 
 char *mem_strdup(struct mempool *mp, const char *s, const char *file, int line);
 
@@ -80,12 +79,12 @@ char *mem_strdup(struct mempool *mp, const char *s, const char *file, int line);
 #define GFREE(addr) mem_free(&global_mpool, addr, __FILE__, __LINE__)
 #define GSTRDUP(s) mem_strdup(&global_mpool, s, __FILE__, __LINE__)
 
-#define MEM_DUMP(mp) \
+#define MEM_DUMP(mp, time, size) \
 do { \
     if(mp) \
-        mem_dump(mp); \
+        mem_dump(mp, time, size); \
     else \
-        mem_dump(&global_mpool); \
+        mem_dump(&global_mpool, time, size); \
 }while(0)
 
 #else

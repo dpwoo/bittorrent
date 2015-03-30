@@ -31,6 +31,8 @@ static int tracker_udp_connect_req(struct tracker *tr);
 static int tracker_udp_connect_rsp(struct tracker *tr);
 static int tracker_udp_announce_req(struct tracker *tr);
 static int tracker_udp_announce_rsp(struct tracker *tr);
+static int tracker_udp_scrape_req(struct tracker *tr);
+static int tracker_udp_scrape_rsp(struct tracker *tr);
 
 static int tracker_udp_timeout_handle(int event, void *evt);
 static int tracker_udp_event_handle(int event, void *evt);
@@ -114,13 +116,13 @@ tracker_udp_send_announce_req(struct tracker *tr)
     memcpy(req_msg+16, tsk->tor.info_hash, SHA1_LEN);
     memcpy(req_msg+36, peer_id, PEER_ID_LEN);
 
-    uint64 downsz = socket_hton64(0);
+    uint64 downsz = socket_hton64(tsk->down_size);
     memcpy(req_msg+56, &downsz, 8);
 
     uint64 leftsz = socket_hton64((int64)tsk->leftpieces * tsk->tor.piece_len);
     memcpy(req_msg+64, &leftsz, 8);
 
-    uint64 uploadsz = socket_hton64(0);
+    uint64 uploadsz = socket_hton64(tsk->upload_size);
     memcpy(req_msg+72, &uploadsz, 8);
 
     int event = !tr->announce_cnt ? 2 : 0;
@@ -137,11 +139,38 @@ tracker_udp_send_announce_req(struct tracker *tr)
     memcpy(req_msg+96, &port, 2);
 
     if(socket_udp_send(tr->sockid, req_msg, sizeof(req_msg), 0) != sizeof(req_msg)) {
-        LOG_ERROR("tracker[%s:%s] send failed: [%s]!\n", tr->tp.host, tr->tp.port, strerror(errno));
+        LOG_ERROR("tracker[%s:%s] send failed: [%s]!\n",
+                            tr->tp.host, tr->tp.port, strerror(errno));
         return -1;
     }
 
     LOG_DEBUG("[%s:%s] annouce request.\n", tr->tp.host, tr->tp.port);
+
+    return 0;
+}
+
+/* conn_id+action+transaction_id+info_hash */
+static int
+tracker_udp_send_scrape_req(struct tracker *tr)
+{
+    char req_msg[36];
+    memset(req_msg, 0, sizeof(req_msg));
+
+    memcpy(req_msg, &tr->conn_id, 8);
+
+    int action = socket_htonl(2);
+    memcpy(req_msg+8, &action, 4);
+
+    memcpy(req_msg+12, &tr->transaction_id, 4);
+
+    memcpy(req_msg+16, tr->tsk->tor.info_hash, 20);
+
+    if(socket_udp_send(tr->sockid, req_msg, sizeof(req_msg), 0) != sizeof(req_msg)) {
+        LOG_ERROR("tracker[%s:%s] send udp: [%s]!\n", tr->tp.host, tr->tp.port, strerror(errno));
+        return -1;
+    }
+
+    LOG_DEBUG("[%s:%s] scrape request.\n", tr->tp.host, tr->tp.port);
 
     return 0;
 }
@@ -258,8 +287,7 @@ tracker_udp_announce_rsp(struct tracker *tr)
 
     int active = 0;
 
-    char rsp_msg[1024];
-
+    char rsp_msg[1220]; /* at most 200 peers */
     int rcvlen = socket_udp_recv(tr->sockid, rsp_msg, sizeof(rsp_msg), 0);
     if(rcvlen < 16) {
         LOG_ERROR("[%s:%s] recv failed\n", tr->tp.host, tr->tp.port);
@@ -326,6 +354,83 @@ FREE:
 }
 
 static int
+tracker_udp_scrape_req(struct tracker *tr)
+{
+    tr->connect_cnt = 0;
+
+    tr->transaction_id = socket_htonl(time(NULL));
+
+    if(tracker_udp_send_scrape_req(tr)) {
+        goto FAILED;
+    }
+
+    tr->state = TRACKER_STATE_UDP_SCRAPE_RSP;
+    if(tracker_mod_event(EPOLLIN, tr, tracker_udp_event_handle)) {
+        LOG_ERROR("[%s:%s] modify event failed\n", tr->tp.host, tr->tp.port);
+        goto FAILED;
+    }
+
+    if(tracker_start_timer(tr, 1500)) {
+        LOG_ERROR("[%s:%s] start timer failed\n", tr->tp.host, tr->tp.port);
+        goto FAILED;
+    }
+
+    return 0;
+
+FAILED:
+    tracker_destroy_timer(tr);
+    tracker_del_event(tr);
+    tracker_reset_members(tr);
+    torrent_tracker_recycle(tr->tsk, tr, 0);
+    return -1;
+}
+
+static int
+tracker_udp_scrape_rsp(struct tracker *tr)
+{
+    tracker_stop_timer(tr);
+
+    int active = 0;
+
+    char rsp_msg[20];
+    int rcvlen = socket_udp_recv(tr->sockid, rsp_msg, sizeof(rsp_msg), 0);
+    if(rcvlen < 20) {
+        LOG_ERROR("[%s:%s] recv failed\n", tr->tp.host, tr->tp.port);
+        goto FREE;
+    }
+
+    int action, transaction_id;
+    memcpy(&action, rsp_msg, 4);
+    action = socket_ntohl(action);
+    memcpy(&transaction_id, rsp_msg+4, 4);
+
+    if(action != 2 || transaction_id != tr->transaction_id) {
+        goto FREE;
+    }
+
+    int seeders, completed, leechers;
+    memcpy(&seeders, rsp_msg+8, 4);
+    seeders = socket_htonl(seeders);
+
+    memcpy(&completed, rsp_msg+12, 4);
+    completed = socket_htonl(completed);
+
+    memcpy(&leechers, rsp_msg+16, 4);
+    leechers = socket_htonl(leechers);
+
+    LOG_INFO("Scrape result:[%d,%d,%d]\n", seeders, completed, leechers);
+
+    active = 1;
+
+FREE:
+    tracker_destroy_timer(tr);
+    tracker_del_event(tr);
+    tracker_reset_members(tr);
+    torrent_tracker_recycle(tr->tsk, tr, active);
+    return 0;
+}
+
+static int
 tracker_udp_event_handle(int event, void *evt)
 {
     struct tracker *tr;
@@ -340,6 +445,10 @@ tracker_udp_event_handle(int event, void *evt)
             return tracker_udp_announce_req(tr);
         case TRACKER_STATE_UDP_ANNOUNCE_RSP:
             return tracker_udp_announce_rsp(tr);
+        case TRACKER_STATE_UDP_SCRAPE_REQ:
+            return tracker_udp_scrape_req(tr);
+        case TRACKER_STATE_UDP_SCRAPE_RSP:
+            return tracker_udp_scrape_rsp(tr);
         default:
             LOG_ALARM("invalid state[%d] when event[%x] occur!\n", tr->state, event);
             break;
